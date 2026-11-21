@@ -34,7 +34,12 @@
     ['turned, talking, half blink', { yaw: 0.7, pitch: 0.12, eyes: 0.55, mouth: 0.7 }],
   ];
 
-  const report = (name, body) => fetch(`/save/${name}`, { method: 'POST', body });
+  const token = new URLSearchParams(location.hash.slice(1)).get('token') ?? '';
+  const report = (name, payload) => fetch(`/save/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Head-Token': token },
+    body: JSON.stringify(payload),
+  });
 
   async function main() {
     const stage = document.getElementById('stage');
@@ -65,11 +70,11 @@
       context.strokeStyle = INK;
       context.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
     });
-    await report('preview', sheet.toDataURL('image/png'));
+    await report('preview', { png: sheet.toDataURL('image/png') });
     document.title = 'done';
   }
 
-  main().catch((error) => report('error', String(error?.stack || error)));
+  main().catch((error) => report('error', { message: String(error?.stack || error) }));
 </script>
 </body>
 </html>

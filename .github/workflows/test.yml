@@ -1,0 +1,32 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      # three.js for the viewer's browser tests (package-lock.json is not kept in this repo)
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      # Python and node unit tests, then the viewer tests in the runner's preinstalled Chrome.
+      # The Blender tests skip themselves unless HEAD_BLENDER_TESTS=1.
+      - name: Unit and browser tests
+        run: ./head test --browser

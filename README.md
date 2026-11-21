@@ -1,5 +1,7 @@
 # talking-head
 
+[![test](https://github.com/VinVirtual/talking-head/actions/workflows/test.yml/badge.svg)](https://github.com/VinVirtual/talking-head/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 One illustrated portrait in, a small 3D head and shoulders for a web page out. The head follows the pointer, blinks, and moves its jaw with a voice.
 
 You give it a picture. It gets a rough 3D shape for that picture, lines the shape up with the drawing, projects the drawing onto it as the texture, adds a `jaw` morph target, and exports a GLB (about 0.7 MB in the example) plus a small JSON file that says where the eyes and mouth sit. A framework-free three.js module (`viewer/viewer.js`) shows the result.

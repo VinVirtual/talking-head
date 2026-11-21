@@ -6,9 +6,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>talking-head example: Juno</title>
 <meta name="description" content="One flat drawing turned into a small 3D head that follows the pointer, blinks and talks.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
 <!-- Run `head serve` in the skill folder and open /examples/ : it serves three.js at /three/. In your own site, import three through your bundler. -->
 <script type="importmap">
 { "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
@@ -22,8 +19,9 @@
     --mustard: #e2a93b;
     --blush: #f29f8d;
     --quiet: #4b5263;
-    --display: "Fraunces", "Iowan Old Style", Georgia, serif;
-    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    /* Fonts already on the visitor's machine: the example makes no request to any other site. */
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
     --text-hero: clamp(2.6rem, 1.2rem + 5.2vw, 5.6rem);
     --space: clamp(1rem, 0.6rem + 2vw, 2.5rem);
     --fast: 140ms;
@@ -39,7 +37,7 @@
   .stage { position: relative; aspect-ratio: 1; max-width: 34rem; width: 100%; justify-self: center; }
   .stage::before { content: ""; position: absolute; inset: 9% 3% 0 3%; border-radius: 50% 50% 46% 46%; background: var(--mustard);
     border: 3px solid var(--ink); box-shadow: 10px 12px 0 var(--ink); transform: rotate(-3deg); }
-  .stage::after { content: "fig. 1: one drawing, turned"; position: absolute; left: 0; bottom: -0.4rem; font-size: 0.75rem;
+  .stage::after { content: "fig. 1: computer-generated, from one drawing"; position: absolute; left: 0; bottom: -0.4rem; font-size: 0.75rem;
     background: var(--ink); color: var(--paper); padding: 0.15rem 0.6rem; transform: rotate(-3deg); }
   canvas { position: relative; display: block; width: 100%; height: 100%; }
   .stage[data-state="error"] canvas { visibility: hidden; }
@@ -81,7 +79,7 @@
 <body>
 <main>
   <div class="stage" id="stage">
-    <canvas id="head" aria-label="Juno, a cartoon character with teal hair, as a 3D head that follows your pointer" role="img"></canvas>
+    <canvas id="head" aria-label="Juno, a computer-generated cartoon character with teal hair, as a 3D head that follows your pointer" role="img"></canvas>
   </div>
   <section aria-labelledby="title">
     <h1 id="title">One drawing.<br><em>It talks back.</em></h1>
@@ -120,14 +118,14 @@
     status.dataset.kind = kind;
   };
 
-  const head = createTalkingHead(canvas, { model: 'juno/head.glb', surface: 'juno/head.json' });
+  const head = createTalkingHead(canvas, { model: 'juno/out/head.glb', surface: 'juno/out/head.json' });
   window.talkingHead = head; // handy in the console
   let listener = null;
   let meterFrame = 0;
 
   /** The loudness the jaw uses, also kept for the meter. */
   function level() {
-    const loud = listener.level();
+    const loud = listener ? listener.level() : 0;
     history.push(loud);
     history.shift();
     return loud;
@@ -148,7 +146,7 @@
   }
 
   voice.addEventListener('play', () => {
-    head.setTalking(true, level);
+    head.setTalking(true, listener ? level : null); // no listener: a speech-like rhythm instead
     play.setAttribute('aria-pressed', 'true');
     label.textContent = 'Stop';
     meterFrame = requestAnimationFrame(drawMeter);
@@ -163,8 +161,8 @@
       return;
     }
     try {
-      listener ??= audioLevel(voice); // made on the first click: browsers only start audio after one
-      await listener.resume();
+      listener ??= audioLevel(voice); // made on the first click: browsers only start audio after one. Null if it cannot listen
+      await listener?.resume();
       await voice.play();
     } catch (error) {
       say(`The voice could not be played (${error.message}). She will talk without sound.`, 'error');

@@ -1,0 +1,13 @@
+{
+  "faces": 24000,
+  "texture": 2048,
+  "budgetKB": 1500,
+  "jpegQuality": 88,
+  "front": "-y",
+  "up": "+z",
+  "remesh": true,
+  "voxel": 0.007,
+  "removePlate": "auto",
+  "jawDrop": null,
+  "maxTurn": 0.6
+}

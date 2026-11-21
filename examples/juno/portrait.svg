@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- "Juno": an original, fictional cartoon character drawn for the talking-head example. MIT, same as the repo. -->
+  <defs>
+    <clipPath id="face"><ellipse cx="512" cy="432" rx="188" ry="214"/></clipPath>
+    <clipPath id="body"><path d="M118 1060 C118 880 210 800 372 772 L652 772 C814 800 906 880 906 1060 Z"/></clipPath>
+  </defs>
+  <g stroke="#1d2433" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+    <!-- hair behind the head -->
+    <path d="M512 176 C352 172 268 290 276 452 C280 560 300 640 346 668 L678 668 C724 640 744 560 748 452 C756 290 672 172 512 176 Z" fill="#17777b"/>
+    <!-- shoulders and jumper -->
+    <path d="M118 1060 C118 880 210 800 372 772 L652 772 C814 800 906 880 906 1060 Z" fill="#e2a93b"/>
+    <g clip-path="url(#body)" stroke="none">
+      <path d="M118 1024 C128 900 190 830 300 792 C250 870 232 950 236 1024 Z" fill="#c98f2a"/>
+      <path d="M906 1024 C896 900 834 830 724 792 C774 870 792 950 788 1024 Z" fill="#c98f2a"/>
+    </g>
+    <!-- neck -->
+    <path d="M444 610 L444 770 C470 800 554 800 580 770 L580 610 Z" fill="#eeb089"/>
+    <path d="M444 660 C480 700 544 700 580 660 L580 690 C544 726 480 726 444 690 Z" fill="#d9946f" stroke="none"/>
+    <!-- roll collar -->
+    <path d="M404 762 C420 722 604 722 620 762 C628 800 604 828 512 828 C420 828 396 800 404 762 Z" fill="#f0bd55"/>
+    <path d="M436 768 C456 748 568 748 588 768 C580 790 556 800 512 800 C468 800 444 790 436 768 Z" fill="#eeb089"/>
+    <!-- ears -->
+    <ellipse cx="322" cy="456" rx="30" ry="42" fill="#eeb089"/>
+    <ellipse cx="702" cy="456" rx="30" ry="42" fill="#eeb089"/>
+    <path d="M316 440 C304 452 308 470 322 476" fill="none" stroke-width="5"/>
+    <path d="M708 440 C720 452 716 470 702 476" fill="none" stroke-width="5"/>
+    <!-- face -->
+    <ellipse cx="512" cy="432" rx="188" ry="214" fill="#f6c39c"/>
+    <g clip-path="url(#face)" stroke="none">
+      <path d="M324 432 C330 560 420 650 512 650 C604 650 694 560 700 432 C690 590 600 628 512 628 C424 628 334 590 324 432 Z" fill="#e9ac84"/>
+      <ellipse cx="392" cy="520" rx="38" ry="24" fill="#f29f8d" opacity="0.75"/>
+      <ellipse cx="632" cy="520" rx="38" ry="24" fill="#f29f8d" opacity="0.75"/>
+    </g>
+    <!-- fringe -->
+    <path d="M318 430 C296 300 380 200 512 200 C644 200 728 300 706 430 C690 360 650 318 600 300 C560 350 470 372 400 352 C360 364 330 392 318 430 Z" fill="#1f8a8a"/>
+    <path d="M400 352 C440 330 470 300 484 262" fill="none" stroke-width="5"/>
+    <path d="M600 300 C580 282 566 262 560 240" fill="none" stroke-width="5"/>
+    <path d="M380 262 C420 226 470 214 520 216" fill="none" stroke="#49b3ad" stroke-width="9"/>
+    <!-- brows -->
+    <path d="M398 392 C420 376 452 374 474 384" fill="none" stroke-width="9"/>
+    <path d="M550 384 C572 374 604 376 626 392" fill="none" stroke-width="9"/>
+    <!-- eyes -->
+    <ellipse cx="437" cy="448" rx="34" ry="40" fill="#fffaf2"/>
+    <ellipse cx="587" cy="448" rx="34" ry="40" fill="#fffaf2"/>
+    <g stroke="none">
+      <ellipse cx="441" cy="452" rx="20" ry="25" fill="#3b2a52"/>
+      <ellipse cx="583" cy="452" rx="20" ry="25" fill="#3b2a52"/>
+      <circle cx="449" cy="441" r="8" fill="#fffaf2"/>
+      <circle cx="591" cy="441" r="8" fill="#fffaf2"/>
+    </g>
+    <!-- nose and mouth -->
+    <path d="M506 500 C498 516 502 528 518 528" fill="none" stroke-width="6"/>
+    <path d="M468 566 C492 590 532 590 556 566" fill="none" stroke-width="8"/>
+    <path d="M498 602 C508 607 518 607 526 602" fill="none" stroke-width="4" stroke="#c98a68"/>
+  </g>
+</svg>

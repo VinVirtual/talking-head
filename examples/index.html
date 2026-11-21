@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>talking-head example: Juno</title>
+<meta name="description" content="One flat drawing turned into a small 3D head that follows the pointer, blinks and talks.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<!-- Run `head serve` in the skill folder and open /examples/ : it serves three.js at /three/. In your own site, import three through your bundler. -->
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+<style>
+  :root {
+    --paper: #ece7dc;
+    --paper-deep: #dcd5c5;
+    --ink: #1d2433;
+    --teal: #1f8a8a;
+    --mustard: #e2a93b;
+    --blush: #f29f8d;
+    --quiet: #4b5263;
+    --display: "Fraunces", "Iowan Old Style", Georgia, serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    --text-hero: clamp(2.6rem, 1.2rem + 5.2vw, 5.6rem);
+    --space: clamp(1rem, 0.6rem + 2vw, 2.5rem);
+    --fast: 140ms;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 1rem/1.55 var(--mono);
+    background-image: radial-gradient(var(--paper-deep) 1px, transparent 1.4px); background-size: 18px 18px; }
+  main { max-width: 74rem; margin: 0 auto; padding: var(--space); display: grid; gap: var(--space);
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: center; min-height: 100vh; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+
+  .stage { position: relative; aspect-ratio: 1; max-width: 34rem; width: 100%; justify-self: center; }
+  .stage::before { content: ""; position: absolute; inset: 9% 3% 0 3%; border-radius: 50% 50% 46% 46%; background: var(--mustard);
+    border: 3px solid var(--ink); box-shadow: 10px 12px 0 var(--ink); transform: rotate(-3deg); }
+  .stage::after { content: "fig. 1: one drawing, turned"; position: absolute; left: 0; bottom: -0.4rem; font-size: 0.75rem;
+    background: var(--ink); color: var(--paper); padding: 0.15rem 0.6rem; transform: rotate(-3deg); }
+  canvas { position: relative; display: block; width: 100%; height: 100%; }
+  .stage[data-state="error"] canvas { visibility: hidden; }
+
+  h1 { font: 800 var(--text-hero)/0.92 var(--display); letter-spacing: -0.035em; margin: 0 0 1.2rem; }
+  h1 em { font-style: italic; font-weight: 600; color: var(--teal); }
+  .lede { max-width: 34rem; color: var(--quiet); margin: 0 0 1.8rem; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 1.1rem 1.4rem; margin-bottom: 2rem; }
+  button { font: 600 1.05rem var(--mono); color: var(--paper); background: var(--ink); border: 3px solid var(--ink); border-radius: 999px;
+    padding: 0.85rem 1.6rem 0.85rem 1.3rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.7rem;
+    box-shadow: 5px 6px 0 var(--teal); transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease), background-color var(--fast); }
+  button:hover { transform: translate(-2px, -2px); box-shadow: 8px 9px 0 var(--teal); }
+  button:active { transform: translate(4px, 5px); box-shadow: 1px 1px 0 var(--teal); }
+  button:focus-visible { outline: 3px solid var(--blush); outline-offset: 4px; }
+  button[aria-pressed="true"] { background: var(--teal); box-shadow: 5px 6px 0 var(--ink); }
+  button:disabled { opacity: 0.45; cursor: wait; }
+  .glyph { width: 0.9rem; height: 0.9rem; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); transition: clip-path var(--fast) var(--ease); }
+  button[aria-pressed="true"] .glyph { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
+
+  .meter { display: flex; align-items: flex-end; gap: 3px; height: 2.6rem; }
+  .meter i { width: 5px; height: 100%; background: var(--ink); transform-origin: bottom; transform: scaleY(0.06); }
+  .meter i:nth-child(3n) { background: var(--teal); }
+  .meter-label { font-size: 0.75rem; color: var(--quiet); margin-left: 0.2rem; }
+
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 3px solid var(--ink); background: var(--paper); }
+  .steps li { padding: 0.9rem 1rem 1rem; border-bottom: 1px solid var(--ink); }
+  .steps li:nth-child(odd) { border-right: 1px solid var(--ink); }
+  .steps li:nth-last-child(-n + 2) { border-bottom: 0; }
+  .steps li:first-child { background: var(--ink); color: var(--paper); }
+  .steps b { display: block; font: 600 1.25rem/1.1 var(--display); margin-bottom: 0.3rem; }
+  .steps span { font-size: 0.8rem; opacity: 0.8; }
+  .steps code { display: block; margin-top: 0.5rem; font-size: 0.72rem; color: var(--teal); overflow-wrap: anywhere; }
+  .steps li:first-child code { color: var(--mustard); }
+  #status { font-size: 0.8rem; color: var(--quiet); min-height: 1.3rem; margin: 1rem 0 0; }
+  #status[data-kind="error"] { color: #a3321e; }
+  @media (prefers-reduced-motion: reduce) { button, .glyph { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="stage" id="stage">
+    <canvas id="head" aria-label="Juno, a cartoon character with teal hair, as a 3D head that follows your pointer" role="img"></canvas>
+  </div>
+  <section aria-labelledby="title">
+    <h1 id="title">One drawing.<br><em>It talks back.</em></h1>
+    <p class="lede">Juno is a single flat SVG portrait. The talking-head pipeline gave her a 3D shape, projected the drawing onto it, and added a jaw. Move your pointer: she follows it. Press play: her mouth follows the loudness of the voice.</p>
+    <div class="controls">
+      <button id="play" type="button" aria-pressed="false" disabled><span class="glyph" aria-hidden="true"></span><span id="play-label">Play her voice</span></button>
+      <div class="meter" id="meter" aria-hidden="true"></div>
+      <span class="meter-label">loudness &rarr; jaw</span>
+    </div>
+    <ol class="steps">
+      <li><b>1 Shape</b><span>A rough 3D form from the portrait.</span><code>head shape juno --source inflate</code></li>
+      <li><b>2 Mark</b><span>Where the eyes, mouth and chin are.</span><code>"eyes":[{"at":[436.5,447.5]…</code></li>
+      <li><b>3 Build</b><span>Fit, texture, jaw; export GLB + JSON.</span><code>head.glb · "jaw" target</code></li>
+      <li><b>4 View</b><span>three.js: follow, blink, talk.</span><code>head.setTalking(true, level)</code></li>
+    </ol>
+    <p id="status" role="status">Loading the head.</p>
+    <audio id="voice" src="juno/voice.mp3" preload="auto"></audio>
+  </section>
+</main>
+<script type="module">
+  import { audioLevel, createTalkingHead } from '../viewer/viewer.js';
+
+  const BARS = 18;
+  const canvas = document.getElementById('head');
+  const stage = document.getElementById('stage');
+  const play = document.getElementById('play');
+  const label = document.getElementById('play-label');
+  const voice = document.getElementById('voice');
+  const status = document.getElementById('status');
+  const meter = document.getElementById('meter');
+  const bars = Array.from({ length: BARS }, () => meter.appendChild(document.createElement('i')));
+  const history = new Array(BARS).fill(0);
+
+  const say = (text, kind = 'info') => {
+    status.textContent = text;
+    status.dataset.kind = kind;
+  };
+
+  const head = createTalkingHead(canvas, { model: 'juno/head.glb', surface: 'juno/head.json' });
+  window.talkingHead = head; // handy in the console
+  let listener = null;
+  let meterFrame = 0;
+
+  /** The loudness the jaw uses, also kept for the meter. */
+  function level() {
+    const loud = listener.level();
+    history.push(loud);
+    history.shift();
+    return loud;
+  }
+
+  function drawMeter() {
+    bars.forEach((bar, index) => { bar.style.transform = `scaleY(${Math.max(0.06, history[index])})`; });
+    meterFrame = requestAnimationFrame(drawMeter);
+  }
+
+  function stopped() {
+    head.setTalking(false);
+    play.setAttribute('aria-pressed', 'false');
+    label.textContent = 'Play her voice';
+    cancelAnimationFrame(meterFrame);
+    history.fill(0);
+    bars.forEach((bar) => { bar.style.transform = ''; });
+  }
+
+  voice.addEventListener('play', () => {
+    head.setTalking(true, level);
+    play.setAttribute('aria-pressed', 'true');
+    label.textContent = 'Stop';
+    meterFrame = requestAnimationFrame(drawMeter);
+  });
+  voice.addEventListener('pause', stopped);
+  voice.addEventListener('ended', stopped);
+
+  play.addEventListener('click', async () => {
+    if (!voice.paused) {
+      voice.pause();
+      voice.currentTime = 0;
+      return;
+    }
+    try {
+      listener ??= audioLevel(voice); // made on the first click: browsers only start audio after one
+      await listener.resume();
+      await voice.play();
+    } catch (error) {
+      say(`The voice could not be played (${error.message}). She will talk without sound.`, 'error');
+      head.setTalking(true); // no loudness to follow: a speech-like rhythm
+      setTimeout(() => head.setTalking(false), 4000);
+    }
+  });
+
+  head.ready.then(() => {
+    play.disabled = false;
+    say('Loaded. Move the pointer, then press play.');
+  }).catch((error) => {
+    stage.dataset.state = 'error';
+    say(`The head could not be loaded: ${error.message}`, 'error');
+  });
+</script>
+</body>
+</html>

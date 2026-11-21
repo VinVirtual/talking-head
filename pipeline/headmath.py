@@ -162,9 +162,6 @@ def validate_marks(marks: Any, width: float, height: float) -> list[str]:
     neck = marks.get("neck")
     if neck is not None and (not isinstance(neck, (int, float)) or isinstance(neck, bool) or not 0 < neck < height):
         errors.append("neck must be a y position inside the picture")
-    tilt = marks["mouth"].get("tilt", 0)
-    if not isinstance(tilt, (int, float)) or abs(tilt) > 0.6:
-        errors.append("mouth.tilt must be an angle in radians between -0.6 and 0.6")
     return errors
 
 

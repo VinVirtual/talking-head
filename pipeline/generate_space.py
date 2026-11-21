@@ -4,11 +4,16 @@ Asks a public Hugging Face Space running Hunyuan3D-2 for an untextured 3D shape 
     python generate_space.py portrait.png out/raw.glb [--space tencent/Hunyuan3D-2] [--seed 1234]
 
 Only the picture is uploaded, under the plain name "input.png". It needs the `gradio_client` package.
+The request is anonymous: gradio_client would otherwise send a Hugging Face login saved on this machine
+(from `hf auth login` or HF_TOKEN), so this script tells it not to (token=False, and
+HF_HUB_DISABLE_IMPLICIT_TOKEN for the huggingface_hub calls it makes). Run it through `head shape
+--source space --yes-upload`, which asks for agreement first.
 The Space is a free shared demo: it can be busy, rate-limited or gone. This script asks once and never retries.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import struct
 import sys
@@ -29,7 +34,14 @@ def png_has_alpha(path: Path) -> bool:
     return struct.unpack(">B", header[25:26])[0] in ALPHA_COLOUR_TYPES
 
 
+def anonymous_client_options() -> dict:
+    """Keyword arguments for gradio_client.Client that keep a saved Hugging Face login out of the request."""
+    return {"token": False, "verbose": False}
+
+
 def generate(portrait: Path, out_path: Path, space: str, seed: int, steps: int, resolution: int) -> Path:
+    os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"  # read when huggingface_hub is first imported, below
+    os.environ.pop("HF_TOKEN", None)
     try:
         from gradio_client import Client, handle_file
     except ImportError as error:
@@ -38,7 +50,7 @@ def generate(portrait: Path, out_path: Path, space: str, seed: int, steps: int, 
     with tempfile.TemporaryDirectory() as folder:
         upload = Path(folder) / "input.png"  # a plain name: nothing about whose picture it is goes with the request
         shutil.copy(portrait, upload)
-        client = Client(space, verbose=False)
+        client = Client(space, **anonymous_client_options())
         result = client.predict(
             caption=None,
             image=handle_file(str(upload)),

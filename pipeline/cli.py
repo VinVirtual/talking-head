@@ -14,13 +14,14 @@ import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 sys.path.insert(0, str(HERE))
 
 import glb  # noqa: E402
+import picture  # noqa: E402
 import headmath  # noqa: E402
 import server  # noqa: E402
 
@@ -130,21 +131,34 @@ def read_json(path: Path) -> Any:
 
 def picture_size(path: Path) -> tuple[int, int]:
     """Width and height of a PNG or JPEG, read from the file's own header."""
-    data = path.read_bytes()
-    if data[:8] == b"\x89PNG\r\n\x1a\n":
-        return struct.unpack(">II", data[16:24])
-    if data[:2] == b"\xff\xd8":
-        position = 2
-        while position + 9 < len(data):
-            if data[position] != 0xFF:
-                position += 1
-                continue
-            marker = data[position + 1]
-            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                height, width = struct.unpack(">HH", data[position + 5:position + 9])
-                return width, height
-            position += 2 + struct.unpack(">H", data[position + 2:position + 4])[0]
-    raise fail(f"{path} is not a PNG or JPEG picture")
+    try:
+        return picture.size_of(Path(path).read_bytes())
+    except (OSError, picture.PictureError) as error:
+        raise fail(f"{path} is not a PNG or JPEG picture ({error})") from error
+
+
+def same_file(first: Path, second: Path) -> bool:
+    try:
+        return first.exists() and second.exists() and first.samefile(second)
+    except OSError:
+        return False
+
+
+def place_file(source: Path, target: Path, replaces: list[Path]) -> None:
+    """
+    Copies `source` to `target` through a temporary name, then removes the files it replaces. Nothing is
+    removed until the copy has succeeded, and nothing at all happens when source and target are one file.
+    """
+    if not same_file(source, target):
+        partial = target.with_name(target.name + ".part")
+        try:
+            shutil.copyfile(source, partial)
+            os.replace(partial, target)
+        finally:
+            partial.unlink(missing_ok=True)
+    for old in replaces:
+        if old != target and not same_file(old, target):
+            old.unlink(missing_ok=True)
 
 
 def run_blender(project: Project, job: dict[str, Any], verbose: bool = False) -> dict[str, Any]:
@@ -220,12 +234,12 @@ def command_check(args: argparse.Namespace) -> int:
          "install Google Chrome or Chromium, or set HEAD_CHROME", needed=False)
     three = find_three()
     line(three is not None, f"three.js ({three})" if three else "three.js for the preview and example pages",
-         f"cd {SKILL} && npm install     (without it the pages load three.js from the jsDelivr CDN)", needed=False)
+         f"cd {SKILL} && npm install     (needed by head preview, head mark --page, head serve and head test --browser)", needed=False)
 
     has_client = subprocess.run([generator_python(), "-c", "import gradio_client"], capture_output=True).returncode == 0
     line(has_client, "gradio_client (only for --source space)", f"{generator_python()} -m pip install gradio_client", needed=False)
-    if args.offline:
-        out("note network check skipped (--offline)")
+    if not args.online:
+        out("note the public generator was not contacted (add --online to check it; that sends a request to huggingface.co)")
     else:
         reachable, detail = space_status(args.space)
         line(reachable, f"public generator {args.space}: {detail}",
@@ -248,21 +262,52 @@ def command_new(args: argparse.Namespace) -> int:
     source = Path(args.portrait)
     if source.suffix.lower() not in PICTURE_KINDS or not source.is_file():
         raise fail(f"{args.portrait} must be an existing PNG or JPEG picture")
-    width, height = picture_size(source)
+    data = source.read_bytes()
+    try:
+        width, height = picture.size_of(data)
+    except picture.PictureError as error:
+        raise fail(f"{args.portrait} cannot be read: {error}") from error
+    turned = picture.orientation_of(data)
+    if turned != picture.UPRIGHT:
+        raise fail(f"{args.portrait} has an EXIF orientation tag ({turned}): viewers show it turned, but Blender and the\n"
+                   "      marking page use the pixels as stored. Rotate it upright in an image editor, save it without the tag, and try again.")
     folder = Path(args.project)
     folder.mkdir(parents=True, exist_ok=True)
     kind = ".png" if source.suffix.lower() == ".png" else ".jpg"
-    for old in PICTURE_KINDS:
-        (folder / f"portrait{old}").unlink(missing_ok=True)
-    shutil.copy(source, folder / f"portrait{kind}")
+    target = folder / f"portrait{kind}"
+    place_file(source, target, [folder / f"portrait{old}" for old in PICTURE_KINDS])
     config_path = folder / "config.json"
     if not config_path.exists():
         config_path.write_text(json.dumps(dict(headmath.DEFAULT_CONFIG), indent=2) + "\n")
     out(f"project {folder} ready: portrait{kind} ({width}x{height}), config.json")
     if max(width, height) < 700:
         out("note: the picture is small. The texture can never be sharper than the picture it comes from.")
-    out(f"next: head shape {folder} --source inflate   (offline)   or   --mesh FILE   or   --source space   (uploads the picture)")
+    out(f"next: head shape {folder} --source inflate   (offline)   or   --mesh FILE   or   --source space --yes-upload   (uploads the picture)")
     return 0
+
+
+UPLOAD_WARNING = (
+    "--source space UPLOADS the portrait to Hugging Face (huggingface.co), to the public Space {space},\n"
+    "  a demo run by Tencent. The model's licence (Tencent Hunyuan 3D 2.0 Community License) does not apply in\n"
+    "  the European Union, the United Kingdom or South Korea: do not use it, or show its output, there.\n"
+    "  It also needs a separate licence above 1 million monthly users, and forbids using the output to train other AI models.\n"
+    "  The upload is anonymous (no saved Hugging Face login is sent), but treat the picture as public."
+)
+
+
+def upload_agreed(args: argparse.Namespace) -> bool:
+    """Whether the user agreed to the upload: --yes-upload, or a typed yes when someone is at the keyboard."""
+    out(UPLOAD_WARNING.format(space=args.space))
+    if args.yes_upload:
+        return True
+    if not sys.stdin.isatty():
+        out("not uploading: add --yes-upload to agree to the upload")
+        return False
+    try:
+        answer = input("  Upload it? Type yes to go ahead: ")
+    except EOFError:
+        return False
+    return answer.strip().lower() == "yes"
 
 
 def command_shape(args: argparse.Namespace) -> int:
@@ -272,26 +317,31 @@ def command_shape(args: argparse.Namespace) -> int:
         raise fail("say where the shape comes from:\n"
                    "  --source inflate   made on this machine from the picture's outline (simple, no face detail)\n"
                    "  --mesh FILE        a mesh you already have from any tool (GLB, glTF, OBJ, PLY, STL)\n"
-                   "  --source space     the public Hunyuan3D-2 demo. This UPLOADS the picture to a third party.")
+                   "  --source space --yes-upload   the public Hunyuan3D-2 demo on Hugging Face. This UPLOADS the picture.")
     project.work.mkdir(parents=True, exist_ok=True)
-    for kind in MESH_KINDS:
-        (project.work / f"raw{kind}").unlink(missing_ok=True)
+    old_meshes = [project.work / f"raw{kind}" for kind in MESH_KINDS]
     if source == "file":
         mesh = Path(args.mesh or "")
         if mesh.suffix.lower() not in MESH_KINDS or not mesh.is_file():
             raise fail(f"--mesh must be an existing file of one of these kinds: {', '.join(MESH_KINDS)}")
         target = project.work / f"raw{mesh.suffix.lower()}"
-        shutil.copy(mesh, target)
+        place_file(mesh, target, old_meshes)
         out(f"using your mesh: {target}")
     elif source == "inflate":
         marks = load_marks(project) if project.marks_path.exists() else None
-        run_blender(project, {"task": "inflate", "picture": str(project.picture), "marks": marks, "out": str(project.work / "raw.glb")}, args.verbose)
+        fresh = project.work / "raw.new.glb"
+        run_blender(project, {"task": "inflate", "picture": str(project.picture), "marks": marks, "out": str(fresh)}, args.verbose)
+        place_file(fresh, project.work / "raw.glb", old_meshes + [fresh])
     else:
-        out(f"uploading {project.picture.name} to the public Space {args.space} (a third party). Only the picture is sent.")
-        command = [generator_python(), str(HERE / "generate_space.py"), str(project.picture), str(project.work / "raw.glb"),
+        if not upload_agreed(args):
+            return 1
+        fresh = project.work / "raw.download.glb"
+        command = [generator_python(), str(HERE / "generate_space.py"), str(project.picture), str(fresh),
                    "--space", args.space, "--seed", str(args.seed)]
         if subprocess.run(command).returncode != 0:
+            fresh.unlink(missing_ok=True)
             return 1
+        place_file(fresh, project.work / "raw.glb", old_meshes + [fresh])
     (project.work / "shape.json").write_text(json.dumps({"source": source, "space": args.space if source == "space" else None}) + "\n")
     out(f"next: head build {project.root}" if project.marks_path.exists() else f"next: head mark {project.root} --auto")
     return 0
@@ -327,13 +377,9 @@ def command_mark(args: argparse.Namespace) -> int:
 def mark_page(project: Project, size: tuple[int, int], port: int) -> int:
     saved = threading.Event()
 
-    def on_save(name: str, body: bytes) -> tuple[int, str]:
+    def on_save(name: str, marks: Any) -> tuple[int, str]:
         if name != "marks":
             return 400, "unknown save"
-        try:
-            marks = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return 400, "the marks are not JSON"
         errors = headmath.validate_marks(marks, *size)
         if errors:
             return 422, "; ".join(errors)
@@ -341,8 +387,10 @@ def mark_page(project: Project, size: tuple[int, int], port: int) -> int:
         saved.set()
         return 200, f"saved to {project.marks_path}"
 
-    web, address = server.start(server.Routes(SKILL, project.root, find_three(), on_save), port)
-    out(f"open this page in a browser, drag the shapes onto the eyes and mouth, and press Save:\n  {address}/pages/mark.html?picture=/project/{project.picture.name}")
+    routes = server.Routes(SKILL, project.root, find_three(), on_save)
+    web, address = server.start(routes, port)
+    out(f"open this page in a browser, drag the shapes onto the eyes and mouth, and press Save:\n"
+        f"  {address}/pages/mark.html?picture=/project/{project.picture.name}#token={routes.token}")
     out("waiting for Save (Ctrl-C to stop without saving)")
     try:
         saved.wait()
@@ -376,42 +424,44 @@ def command_build(args: argparse.Namespace) -> int:
     return 0 if result["underBudget"] and result["jawPoints"] > 0 else 1
 
 
-def command_preview(args: argparse.Namespace) -> int:
-    project = Project(args.project)
-    for needed in (project.model, project.surface):
-        if not needed.exists():
-            raise fail(f"{needed} is missing. Run:  head build {project.root}")
-    chrome = find_chrome()
-    if chrome is None:
-        raise fail("Chrome or Chromium was not found (it draws the preview). Install one or set HEAD_CHROME.")
-    done = threading.Event()
-    state: dict[str, str] = {}
-
-    def on_save(name: str, body: bytes) -> tuple[int, str]:
-        if name == "preview":
-            try:
-                project.preview.write_bytes(server.png_from_data_url(body))
-            except ValueError as error:
-                return 400, str(error)
-        elif name == "error":
-            state["error"] = body.decode("utf-8", errors="replace")[:2000]
-        else:
-            return 400, "unknown save"
-        done.set()
-        return 200, "saved"
-
+def need_three() -> Path:
     three = find_three()
     if three is None:
-        out("note: three.js is not installed here, so the page loads it from the jsDelivr CDN (run npm install in the skill folder to avoid that)")
-    web, address = server.start(server.Routes(SKILL, project.root, three, on_save))
-    url = f"{address}/pages/preview.html?model=/project/out/head.glb&surface=/project/out/head.json&tile={args.tile}"
+        raise fail(f"three.js is not installed for the local pages. Run:  cd {SKILL} && npm install   (or set HEAD_THREE)")
+    return three
+
+
+def run_page(page: str, project: Path | None, handle: Callable[[str, Any, dict], bool], wait: float) -> dict:
+    """
+    Opens one of the skill's pages in headless Chrome and collects what it saves. `handle(name, payload,
+    state)` stores a save and returns True when the page is finished. The page gets this run's token in
+    the address after "#", which never leaves the browser.
+    """
+    chrome = find_chrome()
+    if chrome is None:
+        raise fail("Chrome or Chromium was not found (it draws the page). Install one or set HEAD_CHROME.")
+    done = threading.Event()
+    state: dict[str, Any] = {}
+
+    def on_save(name: str, payload: Any) -> tuple[int, str]:
+        try:
+            finished = handle(name, payload, state)
+        except ValueError as error:
+            return 400, str(error)
+        if finished:
+            done.set()
+        return 200, "saved"
+
+    routes = server.Routes(SKILL, project, need_three(), on_save)
+    web, address = server.start(routes)
+    url = f"{address}/{page}#token={routes.token}"
     with tempfile.TemporaryDirectory(prefix="talking-head-chrome-") as profile:
         command = [chrome, "--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-extensions",
                    "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--mute-audio",
-                   f"--user-data-dir={profile}", url]
+                   "--autoplay-policy=no-user-gesture-required", f"--user-data-dir={profile}", url]
         browser = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            finished = done.wait(PREVIEW_WAIT_SECONDS)
+            finished = done.wait(wait)
         finally:
             browser.terminate()
             try:
@@ -420,9 +470,29 @@ def command_preview(args: argparse.Namespace) -> int:
                 browser.kill()
             server.stop(web)
     if not finished:
-        raise fail(f"the browser did not draw the preview within {PREVIEW_WAIT_SECONDS} seconds (does headless Chrome have WebGL here?)")
+        raise fail(f"the browser did not finish {page.split('?')[0]} within {wait:.0f} seconds (does headless Chrome have WebGL here?)")
     if "error" in state:
-        raise fail(f"the preview page reported: {state['error']}")
+        raise fail(f"the page reported: {state['error']}")
+    return state
+
+
+def command_preview(args: argparse.Namespace) -> int:
+    project = Project(args.project)
+    for needed in (project.model, project.surface):
+        if not needed.exists():
+            raise fail(f"{needed} is missing. Run:  head build {project.root}")
+
+    def handle(name: str, payload: Any, state: dict) -> bool:
+        if name == "preview":
+            project.preview.write_bytes(server.png_from_data_url((payload or {}).get("png")))
+        elif name == "error":
+            state["error"] = str((payload or {}).get("message"))[:2000]
+        else:
+            raise ValueError("unknown save")
+        return True
+
+    run_page(f"pages/preview.html?model=/project/out/head.glb&surface=/project/out/head.json&tile={args.tile}",
+             project.root, handle, PREVIEW_WAIT_SECONDS)
     out(f"preview sheet: {project.preview}\nLook at it: front, turned both ways, blink, mouth open, turned while talking.")
     return 0
 
@@ -465,15 +535,36 @@ def command_verify(args: argparse.Namespace) -> int:
 
 
 def command_serve(args: argparse.Namespace) -> int:
-    three = find_three()
+    three = need_three()
     web, address = server.start(server.Routes(SKILL, Path(args.project).resolve() if args.project else None, three), args.port)
     out(f"serving the skill folder at {address}\n  example: {address}/examples/\n"
-        + ("" if three else "  three.js is loaded from the jsDelivr CDN (run npm install here to use a local copy)\n") + "Ctrl-C to stop")
+        + "Ctrl-C to stop")
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
         server.stop(web)
     return 0
+
+
+BROWSER_TEST_WAIT = 120
+
+
+def browser_tests() -> int:
+    """Runs tests/browser/viewer.html in headless Chrome against the example head and prints its results."""
+    def handle(name: str, payload: Any, state: dict) -> bool:
+        if name != "results":
+            raise ValueError("unknown save")
+        state["results"] = payload
+        return True
+
+    results = run_page("tests/browser/viewer.html", None, handle, BROWSER_TEST_WAIT)["results"]
+    failed = 0
+    for result in results:
+        passed = bool(result.get("ok"))
+        failed += not passed
+        out(("ok   " if passed else "FAIL ") + str(result.get("name")) + ("" if passed else f": {result.get('message')}"))
+    out(f"browser: {len(results) - failed} passed, {failed} failed")
+    return 0 if failed == 0 and results else 1
 
 
 def command_test(args: argparse.Namespace) -> int:
@@ -485,6 +576,8 @@ def command_test(args: argparse.Namespace) -> int:
     else:
         tests = sorted(str(path) for path in (SKILL / "tests").glob("*.test.mjs"))
         codes.append(subprocess.run([node, "--test", *tests], cwd=SKILL).returncode)
+    if args.browser:
+        codes.append(browser_tests())
     return 0 if not any(codes) else 1
 
 
@@ -500,7 +593,8 @@ def parser() -> argparse.ArgumentParser:
         return sub
 
     check = add("check", command_check, "check Python, Blender, node, Chrome, three.js and the public generator")
-    check.add_argument("--offline", action="store_true", help="skip the network check")
+    check.add_argument("--online", action="store_true", help="also ask huggingface.co whether the public generator is running")
+    check.add_argument("--offline", action="store_true", help=argparse.SUPPRESS)  # the old flag; offline is now the default
     check.add_argument("--space", default=DEFAULT_SPACE)
 
     new = add("new", command_new, "start a project folder from a portrait")
@@ -513,6 +607,7 @@ def parser() -> argparse.ArgumentParser:
     shape.add_argument("--mesh", help="a mesh file you already have")
     shape.add_argument("--space", default=DEFAULT_SPACE, help="the Hugging Face Space to ask (with --source space)")
     shape.add_argument("--seed", type=int, default=1234)
+    shape.add_argument("--yes-upload", action="store_true", help="agree to upload the picture to the public Space (with --source space)")
 
     mark = add("mark", command_mark, "set where the eyes, mouth and chin are: estimate, edit on a page, or copy a file")
     mark.add_argument("project")
@@ -543,7 +638,8 @@ def parser() -> argparse.ArgumentParser:
     serve.add_argument("project", nargs="?")
     serve.add_argument("--port", type=int, default=8437)
 
-    add("test", command_test, "run the unit tests")
+    test = add("test", command_test, "run the unit tests")
+    test.add_argument("--browser", action="store_true", help="also run the viewer's tests in headless Chrome (needs three.js installed)")
     for sub in (shape, mark, build):
         sub.add_argument("--verbose", action="store_true", help="show everything Blender prints")
     return top

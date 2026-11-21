@@ -219,8 +219,6 @@ def feature_spot(tree: "meshes.BVHTree", feature: dict, size: tuple[int, int]) -
             depth.append(round(found if found is not None and abs(found - centre) < 0.4 else centre, 4))
     spot = {"at": [round(at[0], 4), round(at[1], 4)], "half": [round(half[0], 4), round(half[1], 4)],
             "grid": {"cols": FEATURE_GRID, "rows": FEATURE_GRID, "span": FEATURE_SPAN, "depth": depth}}
-    if feature.get("tilt"):
-        spot["tilt"] = feature["tilt"]
     return spot
 
 

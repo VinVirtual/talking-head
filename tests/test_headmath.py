@@ -1,13 +1,21 @@
 """Unit tests for the pipeline's pure maths. Run with `head test`, `python -m unittest` or pytest."""
+import contextlib
+import http.client
+import io
 import json
+import shutil
 import struct
 import sys
+import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 import cli  # noqa: E402
+import generate_space  # noqa: E402
+import picture  # noqa: E402
 import glb  # noqa: E402
 import headmath  # noqa: E402
 import server  # noqa: E402
@@ -324,23 +332,244 @@ class Server(unittest.TestCase):
         self.assertIsNone(server.resolve_under(root, "a/../../LICENSE"))
         self.assertEqual(server.resolve_under(root, "/test_headmath.py"), root / "test_headmath.py")
 
-    def test_hidden_files_are_not_served(self):
-        skill = Path(__file__).resolve().parent.parent
-        routes = server.Routes(skill, None, None)
-        self.assertEqual(routes.locate("/.gitignore")[0], "missing")
-        self.assertEqual(routes.locate("/LICENSE")[0], "file")
-        self.assertEqual(routes.locate("/project/anything")[0], "missing")
+    def test_hidden_files_are_not_served_on_any_route(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for place in ("skill", "project", "three"):
+                (root / place / ".secret").mkdir(parents=True)
+                (root / place / ".env").write_text("x")
+                (root / place / ".secret" / "key").write_text("x")
+                (root / place / "open.txt").write_text("x")
+            routes = server.Routes(root / "skill", root / "project", root / "three")
+            for prefix in ("/", "/project/", "/three/"):
+                self.assertEqual(routes.locate(prefix + "open.txt")[0], "file", prefix)
+                self.assertEqual(routes.locate(prefix + ".env")[0], "missing", prefix)
+                self.assertEqual(routes.locate(prefix + ".secret/key")[0], "missing", prefix)
+                self.assertEqual(routes.locate(prefix + "%2Eenv")[0], "missing", prefix)
 
-    def test_three_is_redirected_when_not_installed(self):
-        kind, where = server.Routes(Path("."), None, None).locate("/three/build/three.module.js")
-        self.assertEqual(kind, "redirect")
-        self.assertTrue(where.endswith("/build/three.module.js"))
+    def test_nothing_is_sent_elsewhere_when_three_is_not_installed(self):
+        self.assertEqual(server.Routes(Path("."), None, None).locate("/three/build/three.module.js"), ("missing", None))
+
+    def test_only_this_machine_on_this_port_is_a_good_host(self):
+        for host in ("127.0.0.1:8437", "localhost:8437", "[::1]:8437", "LOCALHOST:8437"):
+            self.assertTrue(server.host_allowed(host, 8437), host)
+        for host in ("evil.example:8437", "127.0.0.1:9999", "127.0.0.1", "localhost.evil.example:8437", None, ""):
+            self.assertFalse(server.host_allowed(host, 8437), host)
 
     def test_only_png_data_urls_are_accepted(self):
         with self.assertRaises(ValueError):
-            server.png_from_data_url(b"data:text/html;base64,AAAA")
+            server.png_from_data_url("data:text/html;base64,AAAA")
         with self.assertRaises(ValueError):
-            server.png_from_data_url(b"data:image/png;base64,AAAA")
+            server.png_from_data_url("data:image/png;base64,AAAA")
+        with self.assertRaises(ValueError):
+            server.png_from_data_url(None)
+
+
+class RunningServer(unittest.TestCase):
+    """The real server, on a free port, answering real requests."""
+
+    def setUp(self):
+        self.saved = []
+        skill = Path(__file__).resolve().parent.parent
+        self.routes = server.Routes(skill, None, None, lambda name, payload: (self.saved.append((name, payload)) or (200, "saved")))
+        self.web, address = server.start(self.routes)
+        self.port = self.routes.port
+        self.addCleanup(server.stop, self.web)
+
+    def request(self, method, path, body=None, headers=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            connection.putrequest(method, path, skip_host=True)
+            for name, value in {"Host": f"127.0.0.1:{self.port}", **(headers or {})}.items():
+                if value is not None:
+                    connection.putheader(name, value)
+            data = body.encode() if isinstance(body, str) else body
+            connection.putheader("Content-Length", str(len(data or b"")))
+            connection.endheaders(data)
+            response = connection.getresponse()
+            return response.status, response.read()
+        finally:
+            connection.close()
+
+    def save(self, **headers):
+        good = {"Content-Type": "application/json", server.TOKEN_HEADER: self.routes.token}
+        return self.request("POST", "/save/marks", '{"a": 1}', {**good, **headers})[0]
+
+    def test_serves_files_to_a_local_host(self):
+        self.assertEqual(self.request("GET", "/LICENSE")[0], 200)
+        self.assertEqual(self.request("GET", "/LICENSE", headers={"Host": f"localhost:{self.port}"})[0], 200)
+
+    def test_refuses_another_host_name(self):
+        self.assertEqual(self.request("GET", "/LICENSE", headers={"Host": f"attacker.example:{self.port}"})[0], 403)
+        self.assertEqual(self.save(Host=f"attacker.example:{self.port}"), 403)
+
+    def test_a_good_save_goes_through(self):
+        self.assertEqual(self.save(), 200)
+        self.assertEqual(self.saved, [("marks", {"a": 1})])
+
+    def test_refuses_a_save_without_the_token(self):
+        self.assertEqual(self.save(**{server.TOKEN_HEADER: None}), 403)
+        self.assertEqual(self.save(**{server.TOKEN_HEADER: "guess"}), 403)
+        self.assertEqual(self.saved, [])
+
+    def test_refuses_a_save_that_is_not_json(self):
+        self.assertEqual(self.save(**{"Content-Type": "text/plain"}), 415)
+        self.assertEqual(self.save(**{"Content-Type": "application/x-www-form-urlencoded"}), 415)
+        self.assertEqual(self.request("POST", "/save/marks", "not json",
+                                      {"Content-Type": "application/json", server.TOKEN_HEADER: self.routes.token})[0], 400)
+        self.assertEqual(self.saved, [])
+
+    def test_each_run_has_its_own_token(self):
+        self.assertNotEqual(server.Routes(Path("."), None, None).token, server.Routes(Path("."), None, None).token)
+
+
+def tiny_jpeg(orientation=None):
+    """A JPEG header with a size and, optionally, an EXIF orientation: enough for the header readers."""
+    parts = [b"\xff\xd8"]
+    if orientation is not None:
+        tiff = b"MM\x00\x2a\x00\x00\x00\x08" + struct.pack(">H", 1) + struct.pack(">HHI", 0x0112, 3, 1) + struct.pack(">HH", orientation, 0) + b"\x00\x00\x00\x00"
+        payload = b"Exif\x00\x00" + tiff
+        parts.append(b"\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload)
+    frame = b"\x08" + struct.pack(">HH", 30, 40) + b"\x03" + b"\x00" * 9
+    parts.append(b"\xff\xc0" + struct.pack(">H", len(frame) + 2) + frame + b"\xff\xd9")
+    return b"".join(parts)
+
+
+def tiny_png(orientation=None):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + b"\x00\x00\x00\x00"
+    body = chunk(b"IHDR", struct.pack(">IIBBBBB", 50, 60, 8, 6, 0, 0, 0))
+    if orientation is not None:
+        tiff = b"II\x2a\x00\x08\x00\x00\x00" + struct.pack("<H", 1) + struct.pack("<HHI", 0x0112, 3, 1) + struct.pack("<HH", orientation, 0)
+        body += chunk(b"eXIf", tiff)
+    return b"\x89PNG\r\n\x1a\n" + body + chunk(b"IDAT", b"") + chunk(b"IEND", b"")
+
+
+class Pictures(unittest.TestCase):
+    def test_reads_sizes(self):
+        self.assertEqual(picture.size_of(tiny_jpeg()), (40, 30))
+        self.assertEqual(picture.size_of(tiny_jpeg(6)), (40, 30))
+        self.assertEqual(picture.size_of(tiny_png()), (50, 60))
+        with self.assertRaises(picture.PictureError):
+            picture.size_of(b"GIF89a")
+
+    def test_reads_exif_orientation_in_jpeg_and_png(self):
+        self.assertEqual(picture.orientation_of(tiny_jpeg()), 1)
+        self.assertEqual(picture.orientation_of(tiny_jpeg(6)), 6)
+        self.assertEqual(picture.orientation_of(tiny_png()), 1)
+        self.assertEqual(picture.orientation_of(tiny_png(8)), 8)
+
+
+class Projects(unittest.TestCase):
+    """`head new` and `head shape --mesh`: nothing of the user's is lost, whatever they point at."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.portrait = Path(__file__).resolve().parent.parent / "examples" / "juno" / "portrait.png"
+
+    def run_cli(self, *arguments):
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            try:
+                code = cli.main([str(argument) for argument in arguments])
+            except SystemExit as stop:
+                code = stop.code if isinstance(stop.code, int) else 1
+                printed.write(str(stop.code))
+        return code, printed.getvalue()
+
+    def test_new_with_the_projects_own_portrait_keeps_it(self):
+        project = self.folder / "p"
+        project.mkdir()
+        own = project / "portrait.png"
+        shutil.copy(self.portrait, own)
+        before = own.read_bytes()
+        self.assertEqual(self.run_cli("new", project, own)[0], 0)
+        self.assertEqual(own.read_bytes(), before)
+
+    def test_new_with_a_bad_picture_keeps_the_old_one(self):
+        project = self.folder / "p"
+        self.assertEqual(self.run_cli("new", project, self.portrait)[0], 0)
+        (self.folder / "broken.jpg").write_bytes(b"not a picture")
+        code, _ = self.run_cli("new", project, self.folder / "broken.jpg")
+        self.assertNotEqual(code, 0)
+        self.assertTrue((project / "portrait.png").exists())
+        self.assertFalse((project / "portrait.jpg").exists())
+
+    def test_new_replaces_a_png_with_a_jpeg_only_after_copying_it(self):
+        project = self.folder / "p"
+        self.run_cli("new", project, self.portrait)
+        jpeg = self.folder / "upright.jpg"
+        jpeg.write_bytes(tiny_jpeg())
+        self.assertEqual(self.run_cli("new", project, jpeg)[0], 0)
+        self.assertTrue((project / "portrait.jpg").exists())
+        self.assertFalse((project / "portrait.png").exists())
+
+    def test_new_refuses_a_picture_with_an_orientation_tag(self):
+        turned = self.folder / "turned.jpg"
+        turned.write_bytes(tiny_jpeg(6))
+        code, printed = self.run_cli("new", self.folder / "p", turned)
+        self.assertNotEqual(code, 0)
+        self.assertIn("orientation", printed)
+
+    def test_shape_with_the_projects_own_mesh_keeps_it(self):
+        project = self.folder / "p"
+        self.run_cli("new", project, self.portrait)
+        raw = project / "work" / "raw.glb"
+        raw.parent.mkdir()
+        raw.write_bytes(b"my mesh")
+        self.assertEqual(self.run_cli("shape", project, "--mesh", raw)[0], 0)
+        self.assertEqual(raw.read_bytes(), b"my mesh")
+
+    def test_shape_with_a_bad_mesh_keeps_the_old_one(self):
+        project = self.folder / "p"
+        self.run_cli("new", project, self.portrait)
+        raw = project / "work" / "raw.obj"
+        raw.parent.mkdir()
+        raw.write_text("v 0 0 0")
+        code, _ = self.run_cli("shape", project, "--mesh", self.folder / "missing.glb")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(raw.read_text(), "v 0 0 0")
+
+    def test_shape_replaces_the_old_mesh_after_copying_the_new_one(self):
+        project = self.folder / "p"
+        self.run_cli("new", project, self.portrait)
+        (project / "work").mkdir()
+        (project / "work" / "raw.obj").write_text("old")
+        new_mesh = self.folder / "new.glb"
+        new_mesh.write_bytes(b"new")
+        self.assertEqual(self.run_cli("shape", project, "--mesh", new_mesh)[0], 0)
+        self.assertEqual((project / "work" / "raw.glb").read_bytes(), b"new")
+        self.assertFalse((project / "work" / "raw.obj").exists())
+
+    def test_the_public_generator_needs_an_explicit_yes(self):
+        project = self.folder / "p"
+        self.run_cli("new", project, self.portrait)
+        with unittest.mock.patch.object(cli.subprocess, "run") as run, \
+                unittest.mock.patch.object(cli.sys.stdin, "isatty", return_value=False):
+            code, printed = self.run_cli("shape", project, "--source", "space")
+        self.assertEqual(code, 1)
+        run.assert_not_called()
+        for words in ("Hugging Face", "tencent/Hunyuan3D-2", "European Union", "United Kingdom", "South Korea", "--yes-upload"):
+            self.assertIn(words, printed)
+
+    def test_check_does_not_go_online_unless_asked(self):
+        with unittest.mock.patch.object(cli, "space_status") as status:
+            self.run_cli("check")
+            status.assert_not_called()
+            status.return_value = (True, "stage RUNNING")
+            self.run_cli("check", "--online")
+            status.assert_called_once()
+
+    def test_the_example_is_a_valid_project(self):
+        example = Path(__file__).resolve().parent.parent / "examples" / "juno"
+        checks = cli.verify_project(cli.Project(str(example)), 1500)
+        self.assertTrue(all(passed for passed, _ in checks), checks)
+        self.assertNotIn("estimated", json.loads((example / "marks.json").read_text()))
+
+
+class Generator(unittest.TestCase):
+    def test_the_upload_is_anonymous(self):
+        self.assertIs(generate_space.anonymous_client_options()["token"], False)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>talking-head: mark the eyes and mouth</title>
+<style>
+  :root {
+    --paper: #ece7dc;
+    --ink: #1d2433;
+    --eye: #1f8a8a;
+    --mouth: #c2452d;
+    --line: #b07a12;
+    --quiet: #5c6272;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --space: clamp(0.75rem, 0.5rem + 1vw, 1.5rem);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--mono); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: var(--space); padding: var(--space); min-height: 100vh; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  figure { margin: 0; align-self: start; border: 2px solid var(--ink); background:
+    repeating-conic-gradient(#dfd9cb 0 25%, #f4f0e6 0 50%) 0 0 / 24px 24px; box-shadow: 6px 6px 0 var(--ink); }
+  svg { display: block; width: 100%; height: auto; max-height: calc(100vh - 2 * var(--space) - 8px); touch-action: none; }
+  .shape { fill-opacity: 0.12; stroke-width: 2; vector-effect: non-scaling-stroke; cursor: grab; }
+  .shape:focus-visible, .rule:focus-visible { outline: none; stroke-width: 4; fill-opacity: 0.25; }
+  .eye { fill: var(--eye); stroke: var(--eye); }
+  .mouth { fill: var(--mouth); stroke: var(--mouth); }
+  .handle { fill: var(--paper); stroke: var(--ink); stroke-width: 2; vector-effect: non-scaling-stroke; cursor: nwse-resize; }
+  .rule { stroke: var(--line); stroke-width: 2; stroke-dasharray: 8 6; vector-effect: non-scaling-stroke; cursor: ns-resize; }
+  .tag { font: 600 12px var(--mono); paint-order: stroke; stroke: var(--paper); stroke-width: 4px; pointer-events: none; }
+  aside h1 { font-size: 1.35rem; line-height: 1.15; margin: 0 0 0.5rem; letter-spacing: -0.01em; }
+  aside p, aside li { color: var(--quiet); margin: 0 0 0.6rem; }
+  aside ol { padding-left: 1.2rem; margin: 0 0 1rem; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.75rem; margin: 0 0 1rem; padding: 0.75rem; border: 1px solid var(--ink); background: #f4f0e6; }
+  dt { font-weight: 600; } dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .key { display: inline-block; width: 0.7rem; height: 0.7rem; margin-right: 0.4rem; border-radius: 50%; }
+  button { font: 600 1rem var(--mono); color: var(--paper); background: var(--ink); border: 2px solid var(--ink); padding: 0.7rem 1.1rem; width: 100%;
+    cursor: pointer; box-shadow: 4px 4px 0 var(--eye); transition: transform 120ms ease-out, box-shadow 120ms ease-out; }
+  button:hover { transform: translate(-1px, -1px); box-shadow: 6px 6px 0 var(--eye); }
+  button:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--eye); }
+  button:focus-visible { outline: 3px solid var(--mouth); outline-offset: 3px; }
+  #status { min-height: 3rem; margin-top: 0.9rem; color: var(--ink); }
+  #status[data-kind="error"] { color: var(--mouth); }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <figure>
+    <svg id="board" role="application" aria-label="The portrait, with shapes to drag onto the eyes and mouth"></svg>
+  </figure>
+  <aside>
+    <h1>Mark the eyes, mouth and chin</h1>
+    <ol>
+      <li>Drag each oval onto its feature. Cover the whole eye, outline included.</li>
+      <li>Drag the square handle to resize. The mouth oval is the size of the <em>open</em> mouth.</li>
+      <li>Put the chin line on the bottom of the chin, the neck line on the narrowest part of the neck.</li>
+    </ol>
+    <p>Keyboard: Tab to a shape, arrow keys to move it (Shift for bigger steps).</p>
+    <dl id="readout" aria-live="off"></dl>
+    <button id="save" type="button">Save marks</button>
+    <p id="status" role="status"></p>
+  </aside>
+</main>
+<script type="module">
+  const SVG = 'http://www.w3.org/2000/svg';
+  const query = new URLSearchParams(location.search);
+  const pictureUrl = query.get('picture') || '/project/portrait.png';
+  const board = document.getElementById('board');
+  const status = document.getElementById('status');
+  const readout = document.getElementById('readout');
+
+  const make = (name, attributes = {}, parent = board) => {
+    const node = document.createElementNS(SVG, name);
+    Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, value));
+    parent.append(node);
+    return node;
+  };
+  const say = (text, kind = 'info') => {
+    status.textContent = text;
+    status.dataset.kind = kind;
+  };
+  const round = (value) => Math.round(value * 10) / 10;
+
+  function loadImage(url) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`could not load the picture at ${url}`));
+      image.src = url;
+    });
+  }
+
+  /** Proportions to start from when there is no marks.json yet. */
+  function startingMarks(width, height) {
+    const eye = { half: [width * 0.035, height * 0.04] };
+    return {
+      eyes: [{ at: [width * 0.42, height * 0.42], ...eye }, { at: [width * 0.58, height * 0.42], ...eye }],
+      mouth: { at: [width * 0.5, height * 0.56], half: [width * 0.05, height * 0.028] },
+      chin: height * 0.64,
+      neck: height * 0.68,
+    };
+  }
+
+  async function existingMarks() {
+    try {
+      const response = await fetch('/project/marks.json');
+      return response.ok ? await response.json() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function toPicture(event) {
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(board.getScreenCTM().inverse());
+    return [point.x, point.y];
+  }
+
+  /** Makes `node` draggable: `move(x, y)` is called with picture positions while it is dragged. */
+  function draggable(node, move) {
+    node.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      node.setPointerCapture(event.pointerId);
+      const drag = (moved) => move(...toPicture(moved));
+      const stop = () => {
+        node.removeEventListener('pointermove', drag);
+        node.removeEventListener('pointerup', stop);
+        node.removeEventListener('pointercancel', stop);
+      };
+      node.addEventListener('pointermove', drag);
+      node.addEventListener('pointerup', stop);
+      node.addEventListener('pointercancel', stop);
+    });
+  }
+
+  function arrowKeys(node, nudge) {
+    node.addEventListener('keydown', (event) => {
+      const step = event.shiftKey ? 10 : 1;
+      const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+      if (!moves[event.key]) return;
+      event.preventDefault();
+      nudge(...moves[event.key]);
+    });
+  }
+
+  async function main() {
+    const image = await loadImage(pictureUrl);
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    const clampX = (x) => Math.min(width, Math.max(0, x));
+    const clampY = (y) => Math.min(height, Math.max(0, y));
+    board.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    make('image', { href: pictureUrl, width, height });
+
+    const stored = await existingMarks();
+    const start = startingMarks(width, height);
+    const marks = {
+      eyes: (stored?.eyes?.length === 2 ? stored.eyes : start.eyes).map((eye) => ({ at: [...eye.at], half: [...eye.half] })),
+      mouth: { at: [...(stored?.mouth?.at ?? start.mouth.at)], half: [...(stored?.mouth?.half ?? start.mouth.half)] },
+      chin: stored?.chin ?? start.chin,
+      neck: stored?.neck ?? start.neck,
+    };
+    const redraws = [];
+    const redraw = () => redraws.forEach((draw) => draw());
+
+    function oval(feature, kind, label) {
+      const shape = make('ellipse', { class: `shape ${kind}`, tabindex: 0, 'aria-label': label });
+      const handle = make('rect', { class: 'handle', width: 0, height: 0 });
+      const tag = make('text', { class: 'tag', fill: `var(--${kind})` });
+      tag.textContent = label;
+      draggable(shape, (x, y) => { feature.at = [clampX(x), clampY(y)]; redraw(); });
+      draggable(handle, (x, y) => { feature.half = [Math.max(4, x - feature.at[0]), Math.max(4, y - feature.at[1])]; redraw(); });
+      arrowKeys(shape, (dx, dy) => { feature.at = [clampX(feature.at[0] + dx), clampY(feature.at[1] + dy)]; redraw(); });
+      redraws.push(() => {
+        const grip = Math.max(width, height) / 90;
+        shape.setAttribute('cx', feature.at[0]);
+        shape.setAttribute('cy', feature.at[1]);
+        shape.setAttribute('rx', feature.half[0]);
+        shape.setAttribute('ry', feature.half[1]);
+        handle.setAttribute('x', feature.at[0] + feature.half[0] - grip / 2);
+        handle.setAttribute('y', feature.at[1] + feature.half[1] - grip / 2);
+        handle.setAttribute('width', grip);
+        handle.setAttribute('height', grip);
+        tag.setAttribute('x', feature.at[0] - feature.half[0]);
+        tag.setAttribute('y', feature.at[1] - feature.half[1] - 6);
+        tag.style.fontSize = `${Math.max(width, height) / 55}px`;
+      });
+    }
+
+    function rule(name, label) {
+      const line = make('line', { class: 'rule', x1: 0, x2: width, tabindex: 0, 'aria-label': label });
+      const tag = make('text', { class: 'tag', fill: 'var(--line)', x: 8 });
+      tag.textContent = label;
+      draggable(line, (_, y) => { marks[name] = clampY(y); redraw(); });
+      arrowKeys(line, (_, dy) => { marks[name] = clampY(marks[name] + dy); redraw(); });
+      redraws.push(() => {
+        line.setAttribute('y1', marks[name]);
+        line.setAttribute('y2', marks[name]);
+        tag.setAttribute('y', marks[name] - 6);
+        tag.style.fontSize = `${Math.max(width, height) / 55}px`;
+      });
+    }
+
+    rule('neck', 'neck');
+    rule('chin', 'chin');
+    oval(marks.mouth, 'mouth', 'mouth (open)');
+    oval(marks.eyes[0], 'eye', 'left eye');
+    oval(marks.eyes[1], 'eye', 'right eye');
+
+    redraws.push(() => {
+      const rows = [
+        ['left eye', marks.eyes[0].at], ['right eye', marks.eyes[1].at], ['mouth', marks.mouth.at],
+        ['chin', [marks.chin]], ['neck', [marks.neck]],
+      ];
+      readout.replaceChildren(...rows.flatMap(([name, values]) => {
+        const term = document.createElement('dt');
+        term.textContent = name;
+        const value = document.createElement('dd');
+        value.textContent = values.map((number) => Math.round(number)).join(', ');
+        return [term, value];
+      }));
+    });
+    redraw();
+
+    document.getElementById('save').addEventListener('click', async () => {
+      const ordered = [...marks.eyes].sort((first, second) => first.at[0] - second.at[0]);
+      const body = {
+        eyes: ordered.map((eye) => ({ at: eye.at.map(round), half: eye.half.map(round) })),
+        mouth: { at: marks.mouth.at.map(round), half: marks.mouth.half.map(round) },
+        chin: round(marks.chin),
+        neck: round(marks.neck),
+      };
+      say('saving');
+      try {
+        const response = await fetch('/save/marks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const answer = await response.json();
+        say(answer.ok ? `Saved. You can close this page. (${answer.message})` : `Not saved: ${answer.message}`, answer.ok ? 'info' : 'error');
+      } catch (error) {
+        say(`Not saved: the head command is no longer listening (${error.message}). Run it again.`, 'error');
+      }
+    });
+  }
+
+  main().catch((error) => say(error.message, 'error'));
+</script>
+</body>
+</html>

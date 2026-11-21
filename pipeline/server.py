@@ -110,5 +110,12 @@ def png_from_data_url(body: bytes) -> bytes:
 def start(routes: Routes, port: int = 0) -> tuple[ThreadingHTTPServer, str]:
     """Starts the server on a background thread. Returns it and its address."""
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(routes))
+    server.daemon_threads = False  # so `stop` can wait for an answer that is still being sent
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def stop(server: ThreadingHTTPServer) -> None:
+    """Stops the server after the requests it is answering have been answered."""
+    server.shutdown()
+    server.server_close()

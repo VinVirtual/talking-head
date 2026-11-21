@@ -25,17 +25,17 @@ $H/README.md                   install, licences, limits
 ## Before you start: three questions
 
 1. **Whose picture is it?** If it shows a real person (a photo or a drawn likeness), the user needs that person's consent. Ask. Do not build a head of a public figure or of anyone the user cannot speak for. This tool makes a cartoon puppet, not a likeness capture, and must not be used to impersonate.
-2. **May the picture leave this machine?** `--source space` uploads it to a public Hugging Face Space run by Tencent. Never choose that yourself. Offer it, say plainly that it uploads the picture and that the model's licence does not cover the EU, UK or South Korea (README, "Licence notes"), and use it only when the user says yes. The default path, `--source inflate`, sends nothing.
+2. **May the picture leave this machine?** `--source space` uploads it to Hugging Face, to a public Space run by Tencent. Never choose that yourself. Offer it and say plainly: it uploads the picture; the model's licence does not apply in the European Union, the United Kingdom or South Korea (do not use it, or show its output, there); it needs a separate licence from Tencent above 1 million monthly active users; and its output must not be used to train or improve other AI models. Use it only when the user says yes, and then pass `--yes-upload` (without it the command refuses when it cannot ask).
 3. **Is the picture suitable?** Front-facing, head and shoulders, illustrated, transparent or flat-coloured background, 1000 pixels or more on the longer side. If it is a vector drawing, rasterise it large. If the background is busy, cut the figure out first (any tool) and save a PNG with transparency.
 
 ## Workflow
 
-1. **Check the machine**: `$H/head check`. It says how to fix what is missing. Blender is required; Chrome is needed only for the preview; three.js only for the local pages.
+1. **Check the machine**: `$H/head check`. It works offline and contacts nobody; it says how to fix what is missing. Blender is required; Chrome is needed for the preview; three.js (`npm install` in the skill folder) for the local pages. Add `--online` only if the user wants to know whether the public generator is up: that sends a request to huggingface.co.
 2. **Start a project**: `$H/head new <dir> <portrait.png>`. Put it next to the user's other asset sources, not inside the web app's source tree.
 3. **Shape**: pick one.
    - `$H/head shape <dir> --source inflate`: made here from the outline. Always works. A puffy shape with a nose bump and no other face detail.
    - `$H/head shape <dir> --mesh FILE`: any mesh of this figure the user already has (GLB, glTF, OBJ, PLY, STL). If it faces another way, pass `--front` or `--up` to `build`.
-   - `$H/head shape <dir> --source space`: the public generator. Only after the user agreed to the upload. It asks once. If it is refused (quota, busy), **do not retry in a loop**: fall back to inflate and say so.
+   - `$H/head shape <dir> --source space --yes-upload`: the public generator. Only after the user agreed to the upload. It asks once. If it is refused (quota, busy), **do not retry in a loop**: fall back to inflate and say so.
 4. **Mark**: `$H/head mark <dir> --auto`, then check the numbers against the picture. They are a guess.
    - If you can see the picture, compare: each eye oval should cover the whole eye including its outline; the mouth is the centre of the closed mouth with the size of the *open* mouth; the chin is the bottom of the chin.
    - To fix them, either edit `marks.json` by hand (pixels from the top-left; `references/formats.md`) or run `$H/head mark <dir> --page` and give the user the address it prints. That command waits until they press Save.
@@ -53,11 +53,12 @@ $H/README.md                   install, licences, limits
 7. **Verify**: `$H/head verify <dir>`. Every line must say `ok`.
 8. **Put it in the page**:
    - Copy `out/head.glb` and `out/head.json` to the site's static assets, and `$H/viewer/viewer.js` and `math.js` into its source. three.js must be installed in the site (`npm i three`).
-   - Mount it on a canvas the site sizes with CSS (square is best). Call `dispose()` when the component unmounts.
-   - Drive the mouth: `head.setTalking(true, level)` where `level()` returns 0 to 1. For an `<audio>` element use `audioLevel(audio)` from the viewer (create it inside a click handler). For text-to-speech with no audio element, `head.setTalking(true)` gives a speech-like rhythm; call `setTalking(false)` when it ends.
+   - Mount it on a canvas the site sizes with CSS (square is best). Call `dispose()` when the component unmounts; the same canvas can be mounted again (StrictMode, hot reload).
+   - Drive the mouth: `head.setTalking(true, level)` where `level()` returns 0 to 1. For an `<audio>` element use `audioLevel(audio)` from the viewer (create it inside a click handler). It returns `null` for audio from another origin without CORS (analysing it would mute it): then call `setTalking(true)` with no level, or serve the file with CORS and add `crossorigin="anonymous"`. For text-to-speech with no audio element, `head.setTalking(true)` gives a speech-like rhythm; call `setTalking(false)` when it ends.
    - Load the viewer lazily (dynamic `import()`) if the head is not at the top of the page: three.js is the heavy part.
    - Give the canvas an `aria-label`, and keep a static `<img>` of the portrait as the fallback for when WebGL or the files fail (`head.ready` rejects with the reason).
-9. **Tell the user** what the head cannot do (README, "Limits"), which shape source was used, and, if the public generator was used, that the model's licence asks for machine-made content to be identified as such and does not cover the EU, UK or South Korea.
+9. **Label it.** On every path (inflated, own mesh or generated), a head that talks to visitors must be labelled as computer-generated where it appears, for example "Animated, computer-generated character" next to it or in its `aria-label`. Add that to the page you build, and tell the user why. With the public generator its licence requires it; on the other paths it is still the honest thing to do.
+10. **Tell the user** what the head cannot do (README, "Limits"), which shape source was used, and, if the public generator was used, that the model's licence asks for machine-made content to be identified as such and does not cover the EU, UK or South Korea.
 
 ## What to expect, honestly
 

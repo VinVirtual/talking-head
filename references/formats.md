@@ -44,14 +44,14 @@ When the file is over `budgetKB`, the build lowers `jpegQuality` in steps of 8 d
     { "at": [436.5, 447.5], "half": [33.6, 39.5] },
     { "at": [586.5, 447.0], "half": [33.6, 40.1] }
   ],
-  "mouth": { "at": [511.5, 575.0], "half": [49.0, 26.9], "tilt": 0 },
+  "mouth": { "at": [511.5, 575.0], "half": [49.0, 26.9] },
   "chin": 654.2,
   "neck": 672.0
 }
 ```
 
 - `eyes`: two, the one on the left of the picture first. `at` is the centre, `half` the half-width and half-height of an oval that covers the whole eye, outline included. The eyelid is drawn 20% larger than this.
-- `mouth`: `at` is the centre of the closed mouth. `half` is the size of the **open** mouth. `tilt` (optional, radians, anticlockwise) turns it for a lopsided smile.
+- `mouth`: `at` is the centre of the closed mouth. `half` is the size of the **open** mouth. A lopsided smile needs nothing extra: the build traces the drawn line between the lips, and the mouth opens from that line.
 - `chin` (optional): y of the bottom of the chin. Left out, it is estimated from the eyes and the mouth.
 - `neck` (optional): y of the narrowest part of the neck. Left out, it is found from the outline. The head above it and the body below it are fitted to the shape separately.
 - `estimated: true` is written by `head mark --auto` and makes `build` remind you to check.
@@ -99,6 +99,7 @@ const head = createTalkingHead(canvas, options);
 | `maxTurn` | from `head.json`, else `0.6` | how far the head turns to follow the pointer, radians |
 | `followPointer` | `true` | listen to `pointermove` on the window |
 | `animate` | `true` | `false` draws one still frame and waits for `renderPose` |
+| `releaseContext` | `false` | `true` makes `dispose()` also force the WebGL context to be lost. Leave it off if the same canvas may be used again |
 
 | Returned | Meaning |
 |---|---|
@@ -106,8 +107,8 @@ const head = createTalkingHead(canvas, options);
 | `setTalking(talking, level?)` | `level` is a function returning the loudness now, 0 to 1. Without it the mouth follows a speech-like rhythm |
 | `setLook(x, y)` | point the head yourself, -1 to 1 across and down |
 | `renderPose({ yaw, pitch, eyes, mouth })` | draw one still pose: radians, eyes 0 open to 1 shut, mouth 0 to 1 |
-| `dispose()` | stop, remove listeners, free the GPU memory |
+| `dispose()` | stop, remove listeners, free the GPU memory (also when called before loading finished). The canvas can be used again |
 
-`audioLevel(mediaElement)` returns `{ level, resume, close }`. It routes the element through a Web Audio analyser (the sound still plays). Create it inside a click or key handler. An audio file from another origin needs CORS headers and the `crossorigin` attribute, or its loudness reads as silence.
+`audioLevel(mediaElement)` returns `{ level, resume, close }`, or `null` when it cannot listen without muting the sound. It routes the element through a Web Audio analyser and on to the speakers. Create it inside a click or key handler. Audio from another origin needs CORS (`crossorigin="anonymous"` on the element and `Access-Control-Allow-Origin` on the file): without it, analysing would mute the element, so `audioLevel` returns `null` with a console warning and leaves playback alone. An element can be connected to Web Audio once in its life: after `close()`, use a new element. A `level` function that returns NaN or anything that is not a number is ignored, and the mouth falls back to the speech-like rhythm.
 
 The canvas is drawn at its CSS size times the device pixel ratio (at most 2). The viewer does not draw while the canvas is off screen. With `prefers-reduced-motion: reduce` it does not sway, nod, breathe or blink; it still follows the pointer and opens its mouth.

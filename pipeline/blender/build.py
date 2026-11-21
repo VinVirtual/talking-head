@@ -253,6 +253,42 @@ def drawn_outline(colour: np.ndarray, figure: np.ndarray, ink: np.ndarray) -> di
     return {"width": round(float(width) * OUTLINE_KEPT / (colour.shape[0] / 2), 4), "color": headmath.to_hex(colour[ink & edge].mean(0))}
 
 
+LINE_SAMPLES = 9
+
+
+def drawn_lip_line(ink: np.ndarray, marks: dict, size: tuple[int, int]) -> dict | None:
+    """
+    The line between the lips as drawn in the picture, on the plane: its ends and its height at evenly
+    spaced points. The viewer opens the mouth from this line, so the opening starts where the drawing's
+    own mouth is, with its corners pinned at the line's ends.
+    """
+    side = ink.shape[0]
+    pad_x, pad_y = (side - size[0]) // 2, (side - size[1]) // 2
+    (cx, cy), (hx, hy) = marks["mouth"]["at"], marks["mouth"]["half"]
+    top, bottom = max(0, int(cy + pad_y - hy * 1.1)), min(side, int(cy + pad_y + hy * 1.1))
+    left, right = max(0, int(cx + pad_x - hx * 1.3)), min(side, int(cx + pad_x + hx * 1.3))
+    window = ink[top:bottom, left:right]
+    found = headmath.lip_line([np.nonzero(window[:, column])[0].tolist() for column in range(window.shape[1])],
+                              cy + pad_y - top, LINE_SAMPLES)
+    if found is None:
+        return None
+    first, last, rows = found
+    x0 = headmath.to_plane((left + first - pad_x, 0), *size)[0]
+    x1 = headmath.to_plane((left + last - pad_x, 0), *size)[0]
+    heights = [headmath.to_plane((0, top + row - pad_y), *size)[1] for row in rows]
+    return {"x": [round(x0, 4), round(x1, 4)], "y": [round(height, 4) for height in heights]}
+
+
+def lip_colour(flat: np.ndarray, marks: dict, size: tuple[int, int]) -> str:
+    """The skin just below the mouth, deepened towards red: the colour of the lower lip's soft rim."""
+    side = flat.shape[0]
+    (cx, cy), (_, hy) = marks["mouth"]["at"], marks["mouth"]["half"]
+    x = int(np.clip(cx + (side - size[0]) // 2, 0, side - 1))
+    y = int(np.clip(cy + (side - size[1]) // 2 + hy * 0.7, 0, side - 1))
+    skin = flat[max(0, y - 3):y + 4, max(0, x - 6):x + 7].reshape(-1, 3).mean(0)
+    return headmath.to_hex(skin * np.array([0.88, 0.66, 0.64]))
+
+
 def add_jaw(shape: "bpy.types.Object", jaw: dict) -> int:
     """The jaw: the chin and lower lip drop, most at the chin, nothing above the mouth or out at the cheeks."""
     co = meshes.points(shape.data)
@@ -393,7 +429,11 @@ def build(job: dict, say: Callable[[str], None]) -> dict:
         settings = following
 
     surface = made["surface"]
-    surface["colors"] = feature_colours(colour, flat, marks, size)
+    surface["colors"] = {**feature_colours(colour, flat, marks, size), "lip": lip_colour(flat, marks, size)}
+    line = drawn_lip_line(ink, marks, size)
+    if line is not None:
+        surface["mouth"]["line"] = line
+    say("lip line " + (f"found, {line['x'][1] - line['x'][0]:.3f} wide" if line else "not found: the mouth opens from a straight line"))
     surface["picture"] = {"width": size[0], "height": size[1]}
     outline = drawn_outline(colour, figure, ink)
     if outline is not None:

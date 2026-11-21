@@ -189,6 +189,49 @@ class Jaw(unittest.TestCase):
         self.assertEqual(headmath.mouth_drop(0.04, 0), 0)
 
 
+def smile(width: int = 30, centre: int = 20, sag: int = 6) -> list[list[int]]:
+    """Columns of a drawn smile two pixels thick, lowest in the middle."""
+    columns = []
+    for column in range(width):
+        row = centre + round(sag * (1 - ((column - width / 2) / (width / 2)) ** 2))
+        columns.append([row, row + 1])
+    return columns
+
+
+class LipLine(unittest.TestCase):
+    def test_follows_a_drawn_smile_end_to_end(self):
+        first, last, rows = headmath.lip_line(smile(), 23, 5)
+        self.assertEqual((first, last), (0, 29))
+        self.assertEqual(len(rows), 5)
+        self.assertGreater(rows[2], rows[0])
+        self.assertAlmostEqual(rows[0], rows[-1], delta=1)
+
+    def test_ignores_other_line_work_further_away(self):
+        columns = smile()
+        columns[10] = columns[10] + [60, 61]   # the crease under the lip, far below
+        columns[3] = [0, 1] + columns[3]       # the nose, far above
+        _, _, rows = headmath.lip_line(columns, 23, 9)
+        self.assertTrue(all(18 <= row <= 28 for row in rows))
+
+    def test_steps_over_a_small_break_in_the_line(self):
+        columns = smile()
+        for column in (12, 13):
+            columns[column] = []
+        first, last, _ = headmath.lip_line(columns, 23, 5)
+        self.assertEqual((first, last), (0, 29))
+
+    def test_stops_where_the_line_jumps_away(self):
+        columns = smile(sag=0)
+        for column in range(22, 30):
+            columns[column] = [40, 41]
+        self.assertEqual(headmath.lip_line(columns, 20, 5)[1], 21)
+
+    def test_no_line_work_means_no_line(self):
+        self.assertIsNone(headmath.lip_line([[] for _ in range(30)], 20, 5))
+        self.assertIsNone(headmath.lip_line(smile(width=4), 20, 5))
+        self.assertIsNone(headmath.lip_line([], 20, 5))
+
+
 def surface():
     grid = {"cols": 2, "rows": 2, "span": 1.8, "depth": [0.1, 0.1, 0.1, 0.1]}
     feature = {"at": [0, 0], "half": [0.1, 0.1], "grid": grid}
@@ -210,6 +253,13 @@ class Surface(unittest.TestCase):
         broken = surface()
         broken["mouth"] = {**broken["mouth"], "grid": {"cols": 3, "rows": 3, "span": 1.8, "depth": [0.1] * 4}}
         self.assertEqual(headmath.validate_surface(broken), ["mouth.grid.depth must have cols x rows numbers"])
+
+    def test_a_lip_line_is_optional_but_must_be_complete(self):
+        with_line = surface()
+        with_line["mouth"] = {**with_line["mouth"], "line": {"x": [-0.1, 0.1], "y": [0, -0.01, 0]}}
+        self.assertEqual(headmath.validate_surface(with_line), [])
+        with_line["mouth"]["line"] = {"x": [-0.1, 0.1]}
+        self.assertEqual(len(headmath.validate_surface(with_line)), 1)
 
     def test_reports_a_bad_colour(self):
         broken = surface()

@@ -279,8 +279,69 @@ def mouth_drop(jaw_drop: float, opening: float, share: float = JAW_SHARE) -> flo
     return jaw_drop * share * opening
 
 
+LINE_GAP = 3        # columns with no ink that a lip line may jump over
+LINE_STEP = 4       # rows a lip line may move between neighbouring columns
+LINE_LEAST = 6      # a lip line shorter than this many columns is not one
+
+
+def _runs(rows: Sequence[int]) -> list[float]:
+    """The middles of the runs of consecutive rows."""
+    middles, start = [], None
+    for index, row in enumerate(rows):
+        if start is None:
+            start = row
+        if index == len(rows) - 1 or rows[index + 1] != row + 1:
+            middles.append((start + row) / 2)
+            start = None
+    return middles
+
+
+def lip_line(columns: Sequence[Sequence[int]], centre: float, samples: int) -> tuple[int, int, list[float]] | None:
+    """
+    The drawn line between the lips, from the rows of line work in each column of a window around the
+    mouth. Starts at the column nearest the middle that has line work close to `centre` (a row), and
+    follows it left and right while it stays joined. Returns (first column, last column, `samples` rows
+    evenly spread between them), or None when no line is found.
+    """
+    if not columns:
+        return None
+    reach = max(LINE_STEP * 3, len(columns) // 6)
+    picked: list[float | None] = []
+    for rows in columns:
+        middles = [middle for middle in _runs(sorted(rows)) if abs(middle - centre) <= reach]
+        picked.append(min(middles, key=lambda middle: abs(middle - centre)) if middles else None)
+    middle = len(columns) // 2
+    start_at = next((index for offset in range(len(columns))
+                     for index in (middle - offset, middle + offset)
+                     if 0 <= index < len(columns) and picked[index] is not None), None)
+    if start_at is None:
+        return None
+    kept = {start_at: picked[start_at]}
+    for direction in (-1, 1):
+        last, gap, index = start_at, 0, start_at + direction
+        while 0 <= index < len(columns) and gap <= LINE_GAP:
+            value = picked[index]
+            if value is not None and abs(value - kept[last]) <= LINE_STEP * (1 + abs(index - last)) / 2 + 1:
+                kept[index], last, gap = value, index, 0
+            else:
+                gap += 1
+            index += direction
+    first, final = min(kept), max(kept)
+    if final - first + 1 < LINE_LEAST:
+        return None
+    known = sorted(kept)
+    rows_out = []
+    for step in range(samples):
+        column = first + (final - first) * step / (samples - 1)
+        after = next(index for index in known if index >= column)
+        before = max(index for index in known if index <= column)
+        share = 0 if after == before else (column - before) / (after - before)
+        rows_out.append(kept[before] * (1 - share) + kept[after] * share)
+    return first, final, rows_out
+
+
 SURFACE_VERSION = 1
-COLOUR_NAMES = ("lid", "lash", "mouth", "tongue", "teeth")
+COLOUR_NAMES = ("lid", "lash", "mouth", "tongue", "teeth")  # "lip" is optional
 
 
 def _grid_errors(name: str, grid: Any) -> list[str]:
@@ -314,6 +375,10 @@ def validate_surface(surface: Any) -> list[str]:
             errors.append(f"{name} needs \"at\" and \"half\"")
             continue
         errors.extend(_grid_errors(name, feature.get("grid")))
+    line = surface.get("mouth", {}).get("line") if isinstance(surface.get("mouth"), Mapping) else None
+    if line is not None and (not isinstance(line, Mapping) or not _is_pair(line.get("x"))
+                             or not isinstance(line.get("y"), (list, tuple)) or len(line["y"]) < 2):
+        errors.append("mouth.line needs \"x\" (from, to) and \"y\" (two or more heights)")
     jaw = surface.get("jaw")
     if not isinstance(jaw, Mapping) or not all(isinstance(jaw.get(key), (int, float)) for key in ("drop", "share")):
         errors.append("jaw needs \"drop\" and \"share\"")

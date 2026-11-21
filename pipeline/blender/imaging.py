@@ -51,12 +51,21 @@ def dilated(mask: np.ndarray, rounds: int) -> np.ndarray:
     return ~eroded(~mask, rounds, border=True)
 
 
-def figure_mask(colour: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+def figure_mask(colour: np.ndarray, alpha: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     """
-    Where the figure is. A picture with a transparent background is used as it is. Otherwise the
-    background is taken to be the flat colour around the border, and everything joined to the border
-    in that colour is removed.
+    Where the figure is, in the padded square picture. A picture with a transparent background is used
+    as it is. Otherwise the background is taken to be the flat colour around the picture's border, and
+    everything joined to the border in that colour is removed.
     """
+    side = colour.shape[0]
+    top, left = (side - size[1]) // 2, (side - size[0]) // 2
+    inside = (slice(top, top + size[1]), slice(left, left + size[0]))
+    figure = np.zeros((side, side), bool)
+    figure[inside] = own_figure(colour[inside], alpha[inside])
+    return figure
+
+
+def own_figure(colour: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     if (alpha < ALPHA_CUT).mean() > 0.005:
         return alpha >= ALPHA_CUT
     border = np.concatenate([colour[0], colour[-1], colour[:, 0], colour[:, -1]])

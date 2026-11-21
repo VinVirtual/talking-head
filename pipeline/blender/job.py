@@ -126,7 +126,7 @@ def estimate_marks(colour: np.ndarray, figure: np.ndarray, size: tuple[int, int]
 
 def task_marks(job: dict) -> None:
     colour, alpha, size = imaging.load_picture(job["picture"])
-    marks = estimate_marks(colour, imaging.figure_mask(colour, alpha), size)
+    marks = estimate_marks(colour, imaging.figure_mask(colour, alpha, size), size)
     Path(job["out"]).write_text(json.dumps(marks, indent=2) + "\n")
     say(f"estimated marks written to {job['out']} (a guess: check them)")
     result({"marks": marks, "size": list(size)})
@@ -136,7 +136,7 @@ def task_inflate(job: dict) -> None:
     import inflate
 
     colour, alpha, size = imaging.load_picture(job["picture"])
-    figure = imaging.figure_mask(colour, alpha)
+    figure = imaging.figure_mask(colour, alpha, size)
     marks = job.get("marks") or estimate_marks(colour, figure, size)
     faces = inflate.inflate(figure, headmath.complete_marks(marks), size, job["out"])
     say(f"inflated shape written to {job['out']} ({faces} faces)")

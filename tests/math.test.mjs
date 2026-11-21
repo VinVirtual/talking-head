@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   clamp, DEFAULT_COLORS, depthAt, discPatch, ease, eyeOpen, lidPoint, lookFromPointer, mergedColors,
-  mouthFromSound, mouthOpen, sampleGrid, heightOn, lipLine, LINE_SAMPLES, mouthBounds, openingDepth, openingProfile, sharedNormals, surfaceProblems,
+  mouthFromSound, mouthOpen, sampleGrid, silencedByAnalyser, targetOpening, heightOn, lipLine, LINE_SAMPLES, mouthBounds, openingDepth, openingProfile, sharedNormals, surfaceProblems,
 } from '../viewer/math.js';
 
 const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 1e-9, message ?? `${actual} is not ${expected}`);
@@ -188,4 +188,29 @@ test('clamp', () => {
   assert.equal(clamp(5, 0, 1), 1);
   assert.equal(clamp(-5, 0, 1), 0);
   assert.equal(clamp(0.3, 0, 1), 0.3);
+});
+
+test('targetOpening uses a real loudness and ignores NaN, Infinity and junk', () => {
+  assert.equal(targetOpening(false, 0.8, false, 1), 0);
+  assert.equal(targetOpening(true, 0.8, false, 1), 0.8);
+  assert.equal(targetOpening(true, 7, false, 1), 1);
+  assert.equal(targetOpening(true, -1, false, 1), 0);
+  for (const junk of [Number.NaN, Infinity, -Infinity, undefined, null, '0.5', {}]) {
+    const open = targetOpening(true, junk, false, 1);
+    assert.ok(Number.isFinite(open) && open >= 0 && open <= 1, String(junk));
+    assert.equal(open, mouthOpen(1));
+  }
+  assert.equal(targetOpening(true, Number.NaN, true, 1), 0.5);
+});
+
+test('only cross-origin audio fetched without CORS is silenced by an analyser', () => {
+  const page = 'http://127.0.0.1:8437/examples/';
+  assert.equal(silencedByAnalyser('juno/voice.mp3', page, null), false);
+  assert.equal(silencedByAnalyser('http://127.0.0.1:8437/a.mp3', page, null), false);
+  assert.equal(silencedByAnalyser('https://cdn.example/a.mp3', page, null), true);
+  assert.equal(silencedByAnalyser('https://cdn.example/a.mp3', page, 'anonymous'), false);
+  assert.equal(silencedByAnalyser('http://127.0.0.1:9999/a.mp3', page, ''), true);
+  assert.equal(silencedByAnalyser('data:audio/wav;base64,AAAA', page, null), false);
+  assert.equal(silencedByAnalyser('blob:http://127.0.0.1:8437/1234', page, null), false);
+  assert.equal(silencedByAnalyser('', page, null), false);
 });

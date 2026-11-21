@@ -27,10 +27,11 @@ import {
   lipLine,
   mouthBounds,
   mouthFromSound,
-  mouthOpen,
   openingDepth,
   sharedNormals,
+  silencedByAnalyser,
   surfaceProblems,
+  targetOpening,
 } from './math.js';
 
 /**
@@ -257,6 +258,18 @@ function outlineHull(head, { width, color }) {
   return hull;
 }
 
+/** Frees the geometry, materials and textures of a loaded model that was never shown. */
+function freeLoaded(root) {
+  root.traverse((object) => {
+    object.geometry?.dispose();
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.filter(Boolean).forEach((material) => {
+      Object.values(material).forEach((value) => value?.isTexture && value.dispose());
+      material.dispose();
+    });
+  });
+}
+
 async function loadSurface(surface) {
   if (typeof surface !== 'string') return surface;
   const response = await fetch(surface);
@@ -274,9 +287,12 @@ async function loadSurface(surface) {
  * @param {number} [options.maxTurn] how far the head turns to follow the pointer, radians
  * @param {boolean} [options.followPointer=true]
  * @param {boolean} [options.animate=true] false draws one still frame and waits for `renderPose`
+ * @param {boolean} [options.releaseContext=false] true makes dispose() also force the WebGL context to be lost.
+ *   Leave it off when the same canvas may be used again (React StrictMode, hot reloading): a lost
+ *   context cannot be got back on that canvas.
  * @returns {{ready: Promise<void>, setTalking: Function, setLook: Function, renderPose: Function, dispose: Function}}
  */
-export function createTalkingHead(canvas, { model, surface, colors, outline, maxTurn, followPointer = true, animate = true } = {}) {
+export function createTalkingHead(canvas, { model, surface, colors, outline, maxTurn, followPointer = true, animate = true, releaseContext = false } = {}) {
   if (!model || !surface) throw new Error('talking-head: both "model" and "surface" are needed');
   const renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'low-power' });
   renderer.outputColorSpace = SRGBColorSpace;
@@ -332,8 +348,7 @@ export function createTalkingHead(canvas, { model, surface, colors, outline, max
 
     // While a sound plays, the mouth follows its loudness; otherwise it follows a speech-like rhythm.
     const heard = state.talking ? state.level?.() : null;
-    const target = state.talking ? (heard ?? (reducedMotion ? 0.5 : mouthOpen(t))) : 0;
-    state.mouth = ease(state.mouth, clamp(target, 0, 1), 26, delta);
+    state.mouth = ease(state.mouth, targetOpening(state.talking, heard, reducedMotion, t), 26, delta);
 
     pose({
       yaw: state.yaw + sway,
@@ -350,7 +365,10 @@ export function createTalkingHead(canvas, { model, surface, colors, outline, max
   };
 
   const ready = Promise.all([new GLTFLoader().loadAsync(model), loadSurface(surface)]).then(([gltf, spots]) => {
-    if (state.disposed) return;
+    if (state.disposed) {
+      freeLoaded(gltf.scene); // dispose() ran while this was loading: nothing else holds these
+      return;
+    }
     const problems = surfaceProblems(spots);
     if (problems.length > 0) throw new Error(`talking-head: the surface description is not usable: ${problems.join('; ')}`);
     const palette = mergedColors(spots.colors, colors);
@@ -397,7 +415,8 @@ export function createTalkingHead(canvas, { model, surface, colors, outline, max
 
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(canvas);
-  const visibility = new IntersectionObserver(([entry]) => {
+  const visibility = new IntersectionObserver((entries) => {
+    const entry = entries[entries.length - 1]; // the newest, when several changes arrive together
     state.visible = entry.isIntersecting; // nothing is drawn while the head is off screen
     state.last = performance.now();
   });
@@ -432,7 +451,7 @@ export function createTalkingHead(canvas, { model, surface, colors, outline, max
       Object.values(materials).forEach((material) => material.dispose());
       texture?.dispose();
       renderer.dispose();
-      renderer.forceContextLoss();
+      if (releaseContext) renderer.forceContextLoss();
     },
   };
 }
@@ -442,32 +461,58 @@ const analysers = new WeakMap();
 /**
  * Listens to an <audio> or <video> element and reports how loud it is, for `setTalking`:
  *
- *   const voice = audioLevel(audioElement);
- *   audioElement.addEventListener('play', () => { voice.resume(); head.setTalking(true, voice.level); });
+ *   const voice = audioLevel(audioElement);           // null when it cannot listen without muting the sound
+ *   audioElement.addEventListener('play', () => { voice?.resume(); head.setTalking(true, voice?.level); });
  *   audioElement.addEventListener('pause', () => head.setTalking(false));
  *
- * Call it from a click or key press the first time (browsers only start audio after one). The element's
- * sound still plays through the speakers. A file from another site needs CORS headers and `crossorigin`.
+ * Call it from a click or key press the first time (browsers only start audio after one).
+ *
+ * The sound is routed through a Web Audio analyser and on to the speakers. A file from another origin
+ * can only be analysed when it is fetched with CORS: give the element `crossorigin="anonymous"` and serve
+ * the file with Access-Control-Allow-Origin. Without that, analysing it would silence it, so this
+ * returns null, warns in the console and leaves the element alone; `setTalking(true)` with no level
+ * then gives a speech-like rhythm instead.
+ *
+ * An element can be connected to Web Audio only once in its life. After `close()` the element stays
+ * routed to the closed context, so make a new <audio> element rather than calling this again on it.
  * @param {HTMLMediaElement} element
- * @returns {{level: () => number, resume: () => Promise<void>, close: () => Promise<void>}}
+ * @returns {{level: () => number, resume: () => Promise<void>, close: () => Promise<void>} | null}
  */
 export function audioLevel(element) {
   let entry = analysers.get(element);
   if (!entry) {
+    if (silencedByAnalyser(element.currentSrc || element.src, window.location.href, element.crossOrigin)) {
+      console.warn('talking-head: this audio comes from another origin without CORS, so listening to it would mute it. '
+        + 'Add crossorigin="anonymous" and serve it with Access-Control-Allow-Origin. Talking without a level instead.');
+      return null;
+    }
     const context = new (window.AudioContext || window.webkitAudioContext)();
+    let source;
+    try {
+      source = context.createMediaElementSource(element);
+    } catch (error) {
+      context.close();
+      console.warn(`talking-head: cannot listen to this element (${error.message}). It may already be connected to Web Audio.`);
+      return null;
+    }
     const analyser = context.createAnalyser();
     analyser.fftSize = 1024;
-    context.createMediaElementSource(element).connect(analyser);
+    source.connect(analyser);
     analyser.connect(context.destination);
     entry = { context, analyser, samples: new Uint8Array(analyser.fftSize) };
     analysers.set(element, entry);
   }
+  const current = entry;
   return {
     level() {
-      entry.analyser.getByteTimeDomainData(entry.samples);
-      return mouthFromSound(entry.samples);
+      if (current.context.state === 'closed') return 0;
+      current.analyser.getByteTimeDomainData(current.samples);
+      return mouthFromSound(current.samples);
     },
-    resume: () => entry.context.resume(),
-    close: () => entry.context.close(),
+    resume: () => current.context.resume(),
+    close: () => {
+      if (analysers.get(element) === current) analysers.delete(element);
+      return current.context.state === 'closed' ? Promise.resolve() : current.context.close();
+    },
   };
 }

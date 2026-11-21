@@ -51,6 +51,43 @@ export function mouthFromSound(samples) {
 }
 
 /**
+ * How open the mouth should be heading for this frame. A loudness from `level()` is used when it is a
+ * real number (NaN, Infinity and anything not a number are ignored); otherwise the speech-like rhythm,
+ * or half open with reduced motion. Shut when not talking.
+ * @param {boolean} talking
+ * @param {unknown} heard what level() returned, or null
+ * @param {boolean} reducedMotion
+ * @param {number} t seconds
+ * @returns {number} 0 to 1
+ */
+export function targetOpening(talking, heard, reducedMotion, t) {
+  if (!talking) return 0;
+  if (typeof heard === 'number' && Number.isFinite(heard)) return clamp(heard, 0, 1);
+  return reducedMotion ? 0.5 : mouthOpen(t);
+}
+
+/**
+ * Whether routing a media element through Web Audio would silence it: a file from another origin,
+ * fetched without CORS (no `crossorigin` attribute), plays fine on its own but goes silent through an
+ * analyser. data: and blob: addresses count as this page's own.
+ * @param {string} source the element's currentSrc or src
+ * @param {string} pageAddress location.href
+ * @param {string | null} crossOrigin the element's crossOrigin property
+ * @returns {boolean}
+ */
+export function silencedByAnalyser(source, pageAddress, crossOrigin) {
+  if (!source || crossOrigin) return false;
+  let address;
+  try {
+    address = new URL(source, pageAddress);
+  } catch {
+    return false;
+  }
+  if (address.protocol === 'data:' || address.protocol === 'blob:') return false;
+  return address.origin !== new URL(pageAddress).origin;
+}
+
+/**
  * Where the pointer is relative to the middle of the head, as -1 to 1 across and down.
  * @param {{x: number, y: number}} pointer client position
  * @param {{left: number, top: number, width: number, height: number}} rect the canvas on the page

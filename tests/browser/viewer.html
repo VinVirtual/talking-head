@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<title>talking-head viewer tests</title>
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+<style>canvas { width: 160px; height: 160px; display: block; }</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script type="module">
+  // Run by `head test --browser` in headless Chrome. Each test reports a name, ok and a message.
+  import { audioLevel, createTalkingHead } from '/viewer/viewer.js';
+
+  const MODEL = '/examples/juno/out/head.glb';
+  const SURFACE = '/examples/juno/out/head.json';
+  const token = new URLSearchParams(location.hash.slice(1)).get('token') ?? '';
+  const canvas = document.getElementById('stage');
+  const errors = [];
+  window.addEventListener('error', (event) => errors.push(event.message));
+  window.addEventListener('unhandledrejection', (event) => errors.push(String(event.reason)));
+
+  const frames = (count) => new Promise((resolve) => {
+    const step = (left) => (left <= 0 ? resolve() : requestAnimationFrame(() => step(left - 1)));
+    step(count);
+  });
+  const settle = (promise) => promise.then(() => 'resolved', (error) => `rejected: ${error.message}`);
+
+  /** Whether the middle of the canvas has something drawn in it, read straight after a render. */
+  function drawnInMiddle(head) {
+    head.renderPose({});
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width;
+    copy.height = canvas.height;
+    const context = copy.getContext('2d');
+    context.drawImage(canvas, 0, 0);
+    const [, , , alpha] = context.getImageData(Math.floor(copy.width / 2), Math.floor(copy.height / 2), 1, 1).data;
+    return alpha > 0;
+  }
+
+  const make = (extra = {}) => createTalkingHead(canvas, { model: MODEL, surface: SURFACE, followPointer: false, ...extra });
+
+  const tests = {
+    async 'remounts on the same canvas after dispose (StrictMode, hot reload)'() {
+      const first = make({ animate: false });
+      await first.ready;
+      if (!drawnInMiddle(first)) throw new Error('the first head drew nothing');
+      first.dispose();
+      const second = make({ animate: false });
+      await second.ready;
+      const drawn = drawnInMiddle(second);
+      second.dispose();
+      if (!drawn) throw new Error('the second head on the same canvas drew nothing');
+    },
+
+    async 'dispose while still loading settles quietly, and the canvas still works'() {
+      const early = make();
+      early.dispose();
+      const outcome = await settle(early.ready);
+      if (outcome !== 'resolved') throw new Error(`ready ${outcome}`);
+      const after = make({ animate: false });
+      await after.ready;
+      const drawn = drawnInMiddle(after);
+      after.dispose();
+      if (!drawn) throw new Error('nothing drawn after an early dispose');
+    },
+
+    async 'a level() that returns NaN or junk does not break the animation'() {
+      const head = make();
+      await head.ready;
+      const before = errors.length;
+      for (const junk of [Number.NaN, Infinity, undefined, 'loud', -5]) {
+        head.setTalking(true, () => junk);
+        await frames(4);
+      }
+      head.setTalking(false);
+      await frames(2);
+      const drawn = drawnInMiddle(head);
+      head.dispose();
+      if (errors.length > before) throw new Error(errors.slice(before).join('; '));
+      if (!drawn) throw new Error('nothing drawn after junk levels');
+    },
+
+    async 'audioLevel refuses cross-origin audio without CORS and leaves it alone'() {
+      const audio = new Audio();
+      audio.preload = 'none';
+      audio.src = `http://localhost:${Number(location.port) === 1 ? 2 : 1}/elsewhere.mp3`; // another origin, never fetched
+      const warnings = [];
+      const warn = console.warn;
+      console.warn = (message) => warnings.push(message);
+      const listener = audioLevel(audio);
+      console.warn = warn;
+      if (listener !== null) throw new Error('expected null');
+      if (warnings.length !== 1) throw new Error(`expected one warning, got ${warnings.length}`);
+    },
+
+    async 'audioLevel listens to same-origin audio, and close() forgets the element'() {
+      const audio = new Audio('/examples/juno/voice.mp3');
+      audio.preload = 'none';
+      const listener = audioLevel(audio);
+      if (!listener) throw new Error('expected a listener');
+      const level = listener.level();
+      if (!(level >= 0 && level <= 1)) throw new Error(`level ${level}`);
+      if (audioLevel(audio) === null) throw new Error('a second call before close should share the listener');
+      await listener.close();
+      if (listener.level() !== 0) throw new Error('a closed listener should read 0');
+      const warn = console.warn;
+      console.warn = () => {};
+      const again = audioLevel(audio); // the element cannot be connected twice: null, not a throw
+      console.warn = warn;
+      if (again !== null) throw new Error('expected null after close on the same element');
+    },
+  };
+
+  const results = [];
+  for (const [name, run] of Object.entries(tests)) {
+    try {
+      await run();
+      results.push({ name, ok: true });
+    } catch (error) {
+      results.push({ name, ok: false, message: String(error?.message || error) });
+    }
+  }
+  await fetch('/save/results', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Head-Token': token },
+    body: JSON.stringify(results),
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "talking-head",
+  "version": "0.1.0",
+  "description": "One illustrated portrait in, a small talking 3D head for a web page out.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "exports": {
+    ".": "./viewer/viewer.js",
+    "./math": "./viewer/math.js"
+  },
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "peerDependencies": {
+    "three": ">=0.160.0"
+  },
+  "devDependencies": {
+    "three": "^0.170.0"
+  }
+}

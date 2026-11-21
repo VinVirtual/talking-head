@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# talking-head launcher: head <command> ...   (run "head help" for the list)
+exec "${HEAD_CLI_PYTHON:-python3}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pipeline/cli.py" "$@"

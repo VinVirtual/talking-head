@@ -293,7 +293,7 @@ def command_shape(args: argparse.Namespace) -> int:
         if subprocess.run(command).returncode != 0:
             return 1
     (project.work / "shape.json").write_text(json.dumps({"source": source, "space": args.space if source == "space" else None}) + "\n")
-    out(f"next: head mark {project.root} --auto")
+    out(f"next: head build {project.root}" if project.marks_path.exists() else f"next: head mark {project.root} --auto")
     return 0
 
 
@@ -350,14 +350,14 @@ def mark_page(project: Project, size: tuple[int, int], port: int) -> int:
         out("stopped without saving")
         return 1
     finally:
-        web.shutdown()
+        server.stop(web)
     out(f"marks saved to {project.marks_path}")
     return 0
 
 
 def command_build(args: argparse.Namespace) -> int:
     project = Project(args.project)
-    overrides = {"faces": args.faces, "texture": args.texture, "budgetKB": args.budget, "front": args.front,
+    overrides = {"faces": args.faces, "texture": args.texture, "budgetKB": args.budget, "front": args.front, "up": args.up,
                  "remesh": False if args.no_remesh else None}
     config = project.config(overrides)
     marks = load_marks(project)
@@ -370,8 +370,10 @@ def command_build(args: argparse.Namespace) -> int:
     if result["fit"]["headOverlap"] < 0.8:
         out(f"warning: the shape only overlaps the picture's head by {result['fit']['headOverlap']:.0%}. "
             "Is the mesh facing the right way (--front)? Is it a shape of this picture?")
+    if result["jawPoints"] == 0:
+        out("warning: the jaw moves nothing. The mouth and chin marks are not on the front of the head: check the marks and --front.")
     out(f"next: head preview {project.root}   then look at {project.preview}")
-    return 0 if result["underBudget"] else 1
+    return 0 if result["underBudget"] and result["jawPoints"] > 0 else 1
 
 
 def command_preview(args: argparse.Namespace) -> int:
@@ -416,7 +418,7 @@ def command_preview(args: argparse.Namespace) -> int:
                 browser.wait(10)
             except subprocess.TimeoutExpired:
                 browser.kill()
-            web.shutdown()
+            server.stop(web)
     if not finished:
         raise fail(f"the browser did not draw the preview within {PREVIEW_WAIT_SECONDS} seconds (does headless Chrome have WebGL here?)")
     if "error" in state:
@@ -470,7 +472,7 @@ def command_serve(args: argparse.Namespace) -> int:
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
-        web.shutdown()
+        server.stop(web)
     return 0
 
 
@@ -525,7 +527,8 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--faces", type=int)
     build.add_argument("--texture", type=int)
     build.add_argument("--budget", type=float, help="largest GLB allowed, in KB")
-    build.add_argument("--front", choices=tuple(headmath.FRONT_TURNS))
+    build.add_argument("--front", choices=tuple(headmath.FRONT_TURNS), help="which way the raw mesh faces (default -y)")
+    build.add_argument("--up", choices=tuple(headmath.UP_TURNS), help="which way is up in the raw mesh (default +z)")
     build.add_argument("--no-remesh", action="store_true")
 
     preview = add("preview", command_preview, "draw a contact sheet PNG of the finished head in headless Chrome")

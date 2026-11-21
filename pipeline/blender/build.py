@@ -281,7 +281,7 @@ def export(shape: "bpy.types.Object", out_path: str, quality: int) -> int:
 def prepare_shape(job: dict, config: dict, say: Callable[[str], None]) -> "bpy.types.Object":
     """Import, turn to face the front, remove a backing plate if there is one, rebuild, smooth."""
     shape = meshes.import_mesh(job["mesh"])
-    meshes.normalise(shape, headmath.FRONT_TURNS[config["front"]])
+    meshes.normalise(shape, headmath.FRONT_TURNS[config["front"]], headmath.UP_TURNS[config["up"]])
     plate = meshes.find_plate(shape.data) if config["removePlate"] != "off" else None
     if plate is not None:
         say(f"backing plate found at depth {plate[0]:.3f} to {plate[1]:.3f}: removed ({meshes.remove_plate(shape, plate)} points)")
@@ -298,7 +298,7 @@ def prepare_shape(job: dict, config: dict, say: Callable[[str], None]) -> "bpy.t
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.mesh.quads_convert_to_tris()
         bpy.ops.object.mode_set(mode="OBJECT")
-    meshes.normalise(shape, 0)
+    meshes.normalise(shape)
     return shape
 
 
@@ -337,13 +337,13 @@ def finish(shape: "bpy.types.Object", settings: dict, layers: dict, marks: dict,
     surface["jaw"] = {"drop": round(jaw["drop"], 4), "share": headmath.JAW_SHARE}
     surface["maxTurn"] = config["maxTurn"]
     say(f"{len(mesh.polygons)} faces, picture covers {share.mean():.0%} of the points, front chart {front_share:.0%} of the faces, jaw moves {moved} points")
-    return {"surface": surface, "baked": baked}
+    return {"surface": surface, "baked": baked, "jawPoints": moved}
 
 
 def build(job: dict, say: Callable[[str], None]) -> dict:
     config = headmath.merged_config(job.get("config") or {})
     colour, alpha, size = imaging.load_picture(job["picture"])
-    figure = imaging.figure_mask(colour, alpha)
+    figure = imaging.figure_mask(colour, alpha, size)
     marks = headmath.complete_marks(job["marks"])
     say(f"picture {size[0]}x{size[1]}, figure covers {figure.mean():.0%}")
 
@@ -401,4 +401,4 @@ def build(job: dict, say: Callable[[str], None]) -> dict:
     Path(job["outSurface"]).write_text(json.dumps(surface, separators=(",", ":")) + "\n")
     say(f"{job['outModel']}: {size_bytes / 1024:.0f} KB, {settings['faces']} faces asked, texture {settings['texture']}, JPEG quality {settings['jpegQuality']}")
     return {"bytes": size_bytes, "settings": settings, "fit": {key: fitted[key] for key in ("headOverlap", "bodyOverlap")},
-            "underBudget": size_bytes <= settings["budgetKB"] * 1024}
+            "underBudget": size_bytes <= settings["budgetKB"] * 1024, "jawPoints": made["jawPoints"]}

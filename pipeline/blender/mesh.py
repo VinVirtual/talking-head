@@ -69,9 +69,11 @@ def set_points(mesh: "bpy.types.Mesh", values: np.ndarray) -> None:
     mesh.update()
 
 
-def normalise(shape: "bpy.types.Object", turn_degrees: float) -> None:
-    """Turns the mesh so its front faces -Y, centres it and scales it to fit -1..1."""
+def normalise(shape: "bpy.types.Object", turn_degrees: float = 0, up_turn: tuple[str, float] | None = None) -> None:
+    """Stands the mesh up (if told which way is up), turns its front to -Y, centres it and scales it to fit -1..1."""
     co = points(shape.data)
+    if up_turn is not None:
+        co = co @ np.array(Matrix.Rotation(math.radians(up_turn[1]), 3, up_turn[0])).T
     if turn_degrees:
         co = co @ np.array(Matrix.Rotation(math.radians(turn_degrees), 3, "Z")).T
     low, high = co.min(0), co.max(0)

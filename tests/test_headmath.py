@@ -102,8 +102,14 @@ class Config(unittest.TestCase):
         self.assertEqual(headmath.validate_config({"colour": "red"}), ['unknown setting "colour"'])
 
     def test_reports_bad_values(self):
-        errors = headmath.validate_config({"faces": 10, "texture": 1000, "front": "up", "budgetKB": "big", "jawDrop": 3})
-        self.assertEqual(len(errors), 5)
+        errors = headmath.validate_config({"faces": 10, "texture": 1000, "front": "up", "up": "z", "budgetKB": "big", "jawDrop": 3})
+        self.assertEqual(len(errors), 6)
+
+    def test_every_way_up_and_front_has_a_turn(self):
+        for up in headmath.UP_TURNS:
+            self.assertEqual(headmath.validate_config({"up": up}), [])
+        for front in headmath.FRONT_TURNS:
+            self.assertEqual(headmath.validate_config({"front": front}), [])
 
     def test_true_is_not_a_number(self):
         self.assertTrue(headmath.validate_config({"faces": True}))

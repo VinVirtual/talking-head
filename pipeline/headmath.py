@@ -20,6 +20,7 @@ DEFAULT_CONFIG: Mapping[str, Any] = {
     "budgetKB": 1500,        # the GLB may not be larger than this
     "jpegQuality": 88,
     "front": "-y",           # which way the raw mesh faces after import: -y, +y, -x or +x
+    "up": "+z",              # which way is up in the raw mesh after import: +z, +y, -y, +x, -x or -z
     "remesh": True,          # rebuild the surface from its volume (closes holes, joins parts)
     "voxel": 0.007,          # size of the rebuild's cells, in plane units
     "removePlate": "auto",   # auto, on or off: remove a flat backing plate some generators add
@@ -27,6 +28,7 @@ DEFAULT_CONFIG: Mapping[str, Any] = {
     "maxTurn": 0.6,          # the furthest the viewer turns the head, radians
 }
 FRONT_TURNS = {"-y": 0, "+x": 90, "+y": 180, "-x": 270}  # degrees about the up axis that bring the front to -y
+UP_TURNS = {"+z": None, "+y": ("X", 90), "-y": ("X", -90), "+x": ("Y", -90), "-x": ("Y", 90), "-z": ("X", 180)}  # axis and degrees that bring it to +z
 TEXTURE_SIZES = (512, 1024, 2048, 4096)
 MIN_FACES = 2000
 JAW_DROP_SHARE = 0.15
@@ -196,6 +198,8 @@ def validate_config(config: Any) -> list[str]:
         errors.append("jpegQuality must be a whole number from 40 to 100")
     if merged["front"] not in FRONT_TURNS:
         errors.append(f"front must be one of {', '.join(FRONT_TURNS)}")
+    if merged["up"] not in UP_TURNS:
+        errors.append(f"up must be one of {', '.join(UP_TURNS)}")
     if not isinstance(merged["remesh"], bool):
         errors.append("remesh must be true or false")
     if not number("voxel") or not 0.002 <= merged["voxel"] <= 0.05:

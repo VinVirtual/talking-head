@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
+import cli  # noqa: E402
 import glb  # noqa: E402
 import headmath  # noqa: E402
 import server  # noqa: E402
@@ -220,6 +221,18 @@ class Surface(unittest.TestCase):
         self.assertEqual(headmath.to_hex((2, -1, 0)), "#ff0000")
         self.assertTrue(headmath.is_hex_colour("#A0b1C2"))
         self.assertFalse(headmath.is_hex_colour("#12345"))
+
+
+class CommandLine(unittest.TestCase):
+    def test_an_axis_starting_with_a_dash_is_read_as_a_value(self):
+        self.assertEqual(cli.joined_axis_options(["build", "p", "--front", "-y", "--up", "+y", "--faces", "9000"]),
+                         ["build", "p", "--front=-y", "--up=+y", "--faces", "9000"])
+        args = cli.parser().parse_args(cli.joined_axis_options(["build", "p", "--up", "-y"]))
+        self.assertEqual(args.up, "-y")
+
+    def test_reads_the_size_of_a_png_from_its_header(self):
+        portrait = Path(__file__).resolve().parent.parent / "examples" / "juno" / "portrait.png"
+        self.assertEqual(cli.picture_size(portrait), (1024, 1024))
 
 
 def make_glb(description: dict, pad: bytes = b"") -> bytes:

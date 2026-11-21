@@ -549,8 +549,22 @@ def parser() -> argparse.ArgumentParser:
     return top
 
 
+AXIS_OPTIONS = ("--front", "--up")
+
+
+def joined_axis_options(arguments: list[str]) -> list[str]:
+    """`--front -y` as `--front=-y`: on its own, a value starting with a dash would be read as another option."""
+    joined: list[str] = []
+    for argument in arguments:
+        if joined and joined[-1] in AXIS_OPTIONS:
+            joined[-1] = f"{joined[-1]}={argument}"
+        else:
+            joined.append(argument)
+    return joined
+
+
 def main(argv: list[str] | None = None) -> int:
-    arguments = list(sys.argv[1:] if argv is None else argv)
+    arguments = joined_axis_options(list(sys.argv[1:] if argv is None else argv))
     top = parser()
     if not arguments or arguments[0] in ("help", "-h", "--help"):
         top.print_help()

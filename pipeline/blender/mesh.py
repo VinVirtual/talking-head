@@ -38,6 +38,10 @@ def import_mesh(path: str) -> "bpy.types.Object":
         raise SystemExit(f"head: {path} has no mesh with faces in it")
     bpy.ops.object.select_all(action="DESELECT")
     for item in meshes:
+        if item.data.users > 1:
+            item.data = item.data.copy()  # instanced or shared mesh data: give each object its own
+        if item.data.shape_keys is not None:
+            item.shape_key_clear()  # a previous build's "jaw" and the like: modifiers cannot be applied with them
         item.select_set(True)
     bpy.context.view_layer.objects.active = meshes[0]
     bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")

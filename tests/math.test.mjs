@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  capPatch, clamp, DEFAULT_COLORS, depthAt, discPatch, ease, eyeOpen, lidPoint, lookFromPointer, mergedColors,
-  mouthFromSound, mouthOpen, mouthPoint, mouthShape, sampleGrid, sharedNormals, surfaceProblems,
+  clamp, DEFAULT_COLORS, depthAt, discPatch, ease, eyeOpen, lidPoint, lookFromPointer, mergedColors,
+  mouthFromSound, mouthOpen, sampleGrid, heightOn, lipLine, LINE_SAMPLES, mouthBounds, openingDepth, openingProfile, sharedNormals, surfaceProblems,
 } from '../viewer/math.js';
 
 const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 1e-9, message ?? `${actual} is not ${expected}`);
@@ -91,12 +91,6 @@ test('discPatch can make a band along the lower edge', () => {
   assert.ok(points.every(([x, y]) => y <= 1e-9 && Math.hypot(x, y) >= 0.8 - 1e-9));
 });
 
-test('capPatch stays above its level line and inside the disc', () => {
-  const { points, indices } = capPatch(0.4, 10);
-  assert.ok(points.every(([x, y]) => y >= 0.4 - 1e-9 && Math.hypot(x, y) <= 1 + 1e-9));
-  assert.ok(indices.every((index) => index < points.length));
-});
-
 test('an open lid is folded up at the top of the eye', () => {
   const eye = { at: [0, 0], half: [0.1, 0.1] };
   near(lidPoint([0, -1], eye, 0, 1)[1], 0.1);
@@ -111,21 +105,44 @@ test('a shut lid covers the eye from top to bottom, and a little more to hide it
   assert.ok(lidPoint([0, -1], eye, 1)[1] < 0.25);
 });
 
-test('the mouth follows the chin down by its share of the jaw drop', () => {
-  const mouth = { at: [0, -0.1], half: [0.1, 0.05] };
-  near(mouthShape(mouth, jaw, 0).y, -0.1);
-  near(mouthShape(mouth, jaw, 1).y, -0.1 - 0.04 * 0.45);
-  near(mouthShape(mouth, jaw, 1).width, 0.1);
-  near(mouthShape(mouth, jaw, 1).height, 0.05);
-  assert.ok(mouthShape(mouth, jaw, 0).height < 0.01, 'shut is a slit');
+test('the lip line found in the picture is resampled to a fixed number of heights', () => {
+  const mouth = { at: [0, -0.1], half: [0.1, 0.05], line: { x: [-0.08, 0.08], y: [-0.09, -0.12, -0.09] } };
+  const line = lipLine(mouth);
+  assert.equal(line.y.length, LINE_SAMPLES);
+  near(line.y[0], -0.09);
+  near(line.y[LINE_SAMPLES - 1], -0.09);
+  near(line.y[(LINE_SAMPLES - 1) / 2], -0.12);
+  assert.deepEqual(line.x, [-0.08, 0.08]);
 });
 
-test('mouthPoint turns with the tilt', () => {
-  const shape = { x: 1, y: 2, width: 0.5, height: 0.25 };
-  assert.deepEqual(mouthPoint([1, 0], shape), [1.5, 2]);
-  const [x, y] = mouthPoint([1, 0], shape, Math.PI / 2);
-  near(x, 1);
-  near(y, 2.5);
+test('with no line found the mouth opens from a straight line across the mark', () => {
+  const line = lipLine({ at: [0.2, -0.1], half: [0.1, 0.05] });
+  assert.ok(line.y.every((height) => height === -0.1));
+  near(line.x[0], 0.11);
+  near(line.x[1], 0.29);
+  near(lipLine({ at: [0, 0], half: [0.1, 0.05], line: { x: [0.1, 0.1], y: [0, 0] } }).x[0], -0.09, 'a line with no width is ignored');
+});
+
+test('heightOn blends between neighbours and holds the ends', () => {
+  near(heightOn([0, 10, 20], 0.25), 5);
+  assert.equal(heightOn([0, 10, 20], 1), 20);
+  assert.equal(heightOn([0, 10, 20], -1), 0);
+});
+
+test('the opening keeps its corners pinned and drops most in the middle', () => {
+  near(openingProfile(0), 0);
+  near(openingProfile(1), 0);
+  near(openingProfile(0.5), 1);
+  assert.ok(openingProfile(0.25) > 0.5 && openingProfile(0.25) < 1);
+  for (let share = 0; share <= 1; share += 0.05) assert.ok(openingProfile(share) >= 0 && openingProfile(share) <= 1);
+});
+
+test('the mouth patch covers the line, the deepest opening and the rim below it', () => {
+  const mouth = { at: [0, -0.1], half: [0.1, 0.05], line: { x: [-0.08, 0.08], y: [-0.09, -0.12, -0.09] } };
+  const bounds = mouthBounds(mouth);
+  assert.ok(bounds.left < -0.08 && bounds.right > 0.08);
+  assert.ok(bounds.top > -0.09);
+  assert.ok(bounds.bottom < -0.12 - openingDepth(mouth));
 });
 
 test('sharedNormals makes doubled points agree', () => {

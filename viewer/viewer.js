@@ -2,18 +2,19 @@ import {
   BackSide,
   BufferAttribute,
   BufferGeometry,
+  Color,
   DoubleSide,
   Group,
   Mesh,
   MeshBasicMaterial,
   PerspectiveCamera,
   Scene,
+  ShaderMaterial,
   SRGBColorSpace,
   WebGLRenderer,
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
-  capPatch,
   clamp,
   depthAt,
   discPatch,
@@ -22,10 +23,12 @@ import {
   lidPoint,
   lookFromPointer,
   mergedColors,
+  LINE_SAMPLES,
+  lipLine,
+  mouthBounds,
   mouthFromSound,
   mouthOpen,
-  mouthPoint,
-  mouthShape,
+  openingDepth,
   sharedNormals,
   surfaceProblems,
 } from './math.js';
@@ -46,8 +49,9 @@ const PITCH = 0.2;                 // how far the head tips up and down, radians
 const DEFAULT_TURN = 0.6;          // how far it turns left and right when the build does not say
 const FIELD_OF_VIEW = 15;          // a long lens, framed as the portrait is, so at rest it matches the picture
 const CAMERA_DISTANCE = 7.5;
-const LIFT = { rim: 0.006, mouth: 0.009, inside: 0.012, lid: 0.01, lash: 0.013 }; // how far each layer floats above the surface
-const MOUTH_SHOWS_FROM = 0.05;
+const LIFT = { mouth: 0.011, lid: 0.01, lash: 0.013 }; // how far each layer floats above the surface
+const MOUTH_SHOWS_FROM = 0.02;
+const MOUTH_GRID = [28, 16]; // the mouth patch's columns and rows
 const LID_SHOWS_FROM = 0.02;
 
 /** A small mesh whose points are laid onto the head's surface each time it is placed. */
@@ -88,27 +92,142 @@ function eyelid(eye, materials) {
   };
 }
 
-/** The open mouth, drawn over the closed one in the picture: an outline, the dark inside, top teeth, tongue. */
-function openMouth(mouth, jaw, materials) {
-  const rim = drapedPatch(discPatch({ segments: 40, rings: 2 }), materials.lash);
-  const inside = drapedPatch(discPatch({ segments: 40, rings: 3 }), materials.mouth);
-  const teeth = drapedPatch(capPatch(0.42), materials.teeth);
-  const tongue = drapedPatch(discPatch({ segments: 24, rings: 2 }), materials.tongue);
-  const group = new Group();
-  group.add(rim.mesh, inside.mesh, teeth.mesh, tongue.mesh);
-  const tilt = mouth.tilt ?? 0;
+const MOUTH_VERTEX = /* glsl */ `
+  varying vec2 vPlane;
+  void main() {
+    vPlane = position.xy;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+// Everything about the open mouth is drawn here, per pixel, on a patch seated on the face over the mouth.
+// The opening starts on the drawing's own lip line: its corners stay pinned to the line's ends and only
+// its lower edge drops. Inside: a shaded dark mouth, a tooth edge under the top lip, a tongue resting on
+// the bottom, a thin line along the lower edge and a soft lower-lip rim below it. Outside it is clear,
+// so the drawing shows through.
+const MOUTH_FRAGMENT = /* glsl */ `
+  #define SAMPLES ${LINE_SAMPLES}
+  uniform float opening;
+  uniform float depth;
+  uniform vec2 ends;
+  uniform float heights[SAMPLES];
+  uniform vec3 insideColor;
+  uniform vec3 teethColor;
+  uniform vec3 tongueColor;
+  uniform vec3 lipColor;
+  uniform vec3 inkColor;
+  varying vec2 vPlane;
+
+  float lineAt(float share) {
+    float place = clamp(share, 0.0, 1.0) * float(SAMPLES - 1);
+    float height = heights[0];
+    for (int index = 0; index < SAMPLES - 1; index++) {
+      float part = clamp(place - float(index), 0.0, 1.0);
+      if (place >= float(index)) height = mix(heights[index], heights[index + 1], part);
+    }
+    return height;
+  }
+
+  void main() {
+    float width = ends.y - ends.x;
+    float share = (vPlane.x - ends.x) / width;
+    float along = clamp(share, 0.0, 1.0);
+    float top = lineAt(along);
+    float profile = pow(max(0.0, sin(3.14159265 * along)), 0.85);
+    float drop = opening * depth * profile;
+    float bottom = top - drop;
+    float soft = max(fwidth(vPlane.y), 1e-5) * 1.2;
+    float inRange = step(0.0, share) * step(share, 1.0);
+
+    // Inside the opening: 0 at the lip line, 1 at the lower edge.
+    float inside = inRange * smoothstep(-soft, soft, top - vPlane.y) * smoothstep(-soft, soft, vPlane.y - bottom) * step(1e-5, drop);
+    float t = clamp((top - vPlane.y) / max(drop, 1e-5), 0.0, 1.0);
+    float sideShade = 1.0 - 0.45 * pow(abs(along - 0.5) * 2.0, 2.0);
+    vec3 color = insideColor * (0.55 + 0.6 * smoothstep(0.1, 0.9, t)) * sideShade;
+
+    // The top teeth: a band hanging from the lip line, rounded off towards the corners, a little shade at its edge.
+    float teethHeight = depth * 0.24 * smoothstep(0.08, 0.45, opening) * pow(profile, 0.6);
+    float teethEdge = top - teethHeight;
+    float teeth = smoothstep(-soft, soft, vPlane.y - teethEdge) * step(0.04, profile);
+    vec3 tooth = teethColor * (1.0 - 0.18 * smoothstep(teethHeight * 0.4, teethHeight, top - vPlane.y));
+    color = mix(color, tooth, teeth);
+
+    // The tongue: a soft mound resting on the lower edge.
+    vec2 tongueAt = vec2((along - 0.5) / 0.32, (vPlane.y - bottom) / max(drop * 0.42, 1e-5));
+    float tongueShape = length(vec2(tongueAt.x, max(tongueAt.y, 0.0)));
+    float tongue = (1.0 - smoothstep(0.85, 1.0, tongueShape)) * smoothstep(0.2, 0.55, opening) * (1.0 - teeth);
+    color = mix(color, tongueColor * (0.8 + 0.25 * clamp(tongueAt.y, 0.0, 1.0)), tongue);
+
+    // A line along the lower edge, as the drawing would have it, fading out at the corners.
+    float edge = (1.0 - smoothstep(soft * 0.5, soft * 2.5, abs(vPlane.y - bottom))) * inRange * profile * smoothstep(0.05, 0.2, opening);
+
+    // The lower lip: a soft rim just below the opening.
+    float below = bottom - vPlane.y;
+    float rimWidth = depth * 0.32 * profile;
+    float rim = inRange * smoothstep(-soft, soft, below) * (1.0 - smoothstep(0.0, max(rimWidth, 1e-5), below)) * smoothstep(0.05, 0.3, opening);
+    rim = rim * rim * 0.85;
+
+    vec4 result = vec4(lipColor, rim);
+    result = mix(result, vec4(color, 1.0), inside);
+    result = mix(result, vec4(inkColor, 1.0), edge * 0.9);
+    if (result.a < 0.003) discard;
+    gl_FragColor = result;
+    #include <colorspace_fragment>
+  }
+`;
+
+/** A flat grid over a rectangle of the plane, laid onto the head's surface. */
+function seatedGrid(bounds, feature, lift) {
+  const [columns, rows] = MOUTH_GRID;
+  const positions = new Float32Array((columns + 1) * (rows + 1) * 3);
+  const indices = [];
+  for (let row = 0; row <= rows; row += 1) {
+    for (let column = 0; column <= columns; column += 1) {
+      const x = bounds.left + ((bounds.right - bounds.left) * column) / columns;
+      const y = bounds.bottom + ((bounds.top - bounds.bottom) * row) / rows;
+      positions.set([x, y, depthAt(feature, x, y) + lift], (row * (columns + 1) + column) * 3);
+      if (row < rows && column < columns) {
+        const a = row * (columns + 1) + column;
+        indices.push(a, a + 1, a + columns + 2, a, a + columns + 2, a + columns + 1);
+      }
+    }
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
+/** The open mouth: one patch seated on the face over the mouth, drawn by MOUTH_FRAGMENT. */
+function openMouth(mouth, colors) {
+  const line = lipLine(mouth);
+  const material = new ShaderMaterial({
+    vertexShader: MOUTH_VERTEX,
+    fragmentShader: MOUTH_FRAGMENT,
+    transparent: true,
+    depthWrite: false,
+    side: DoubleSide,
+    uniforms: {
+      opening: { value: 0 },
+      depth: { value: openingDepth(mouth) },
+      ends: { value: line.x },
+      heights: { value: line.y },
+      insideColor: { value: new Color(colors.mouth) },
+      teethColor: { value: new Color(colors.teeth) },
+      tongueColor: { value: new Color(colors.tongue) },
+      lipColor: { value: new Color(colors.lip ?? colors.lid) },
+      inkColor: { value: new Color(colors.lash) },
+    },
+  });
+  const mesh = new Mesh(seatedGrid(mouthBounds(mouth, line), mouth, LIFT.mouth), material);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 1;
   return {
-    group,
+    group: mesh,
+    material,
     set(opening) {
-      group.visible = opening > MOUTH_SHOWS_FROM;
-      if (!group.visible) return;
-      const shape = mouthShape(mouth, jaw, opening);
-      const outline = Math.min(shape.width, shape.height) * 0.16 + mouth.half[0] * 0.03;
-      const outer = { ...shape, width: shape.width + outline, height: shape.height + outline };
-      rim.place((point) => mouthPoint(point, outer, tilt), mouth, LIFT.rim);
-      inside.place((point) => mouthPoint(point, shape, tilt), mouth, LIFT.mouth);
-      teeth.place((point) => mouthPoint([point[0] * 0.9, point[1] * 0.94], shape, tilt), mouth, LIFT.inside);
-      tongue.place((point) => mouthPoint([point[0] * 0.56, -0.5 + point[1] * 0.36], shape, tilt), mouth, LIFT.inside);
+      mesh.visible = opening > MOUTH_SHOWS_FROM;
+      material.uniforms.opening.value = opening;
     },
   };
 }
@@ -234,7 +353,8 @@ export function createTalkingHead(canvas, { model, surface, colors, outline, max
     if (state.disposed) return;
     const problems = surfaceProblems(spots);
     if (problems.length > 0) throw new Error(`talking-head: the surface description is not usable: ${problems.join('; ')}`);
-    Object.entries(mergedColors(spots.colors, colors)).forEach(([name, color]) => {
+    const palette = mergedColors(spots.colors, colors);
+    Object.entries(palette).forEach(([name, color]) => {
       materials[name] = new MeshBasicMaterial({ color, side: DoubleSide });
     });
     const heads = [];
@@ -263,7 +383,8 @@ export function createTalkingHead(canvas, { model, surface, colors, outline, max
     if (!face.jaw) throw new Error('talking-head: the model has no "jaw" morph target (was it made by `head build`?)');
     if (maxTurn === undefined && Number.isFinite(spots.maxTurn)) state.turn = spots.maxTurn;
     face.lids = spots.eyes.map((eye) => eyelid(eye, materials));
-    face.mouth = openMouth(spots.mouth, spots.jaw, materials);
+    face.mouth = openMouth(spots.mouth, palette);
+    materials.openMouth = face.mouth.material;
     figure.add(gltf.scene, ...face.lids.map((lid) => lid.group), face.mouth.group);
     state.loaded = true;
     state.last = performance.now();

@@ -3,8 +3,8 @@
 const BLINK_EVERY = 3.6;
 const BLINK_LENGTH = 0.14;
 const LOUDNESS_LIFT = 4.2; // quiet speech still moves the lips
-export const COLOR_NAMES = ['lid', 'lash', 'mouth', 'tongue', 'teeth'];
-export const DEFAULT_COLORS = { lid: '#e0b090', lash: '#22161a', mouth: '#3a1215', tongue: '#c9645c', teeth: '#f4efe8' };
+export const COLOR_NAMES = ['lid', 'lash', 'mouth', 'tongue', 'teeth', 'lip'];
+export const DEFAULT_COLORS = { lid: '#e0b090', lash: '#22161a', mouth: '#3a1215', tongue: '#c9645c', teeth: '#f4efe8', lip: '#c07a6a' };
 
 /**
  * How open the eyes are (1 open, 0 shut) at time `t` seconds: a quick blink every few seconds.
@@ -124,28 +124,6 @@ export function discPatch({ inner = 0, outer = 1, from = 0, to = Math.PI * 2, se
 }
 
 /**
- * The part of the unit disc above a level line (a "cap"), as points and triangles: the top teeth.
- * @param {number} level -1 to 1: the height of the flat edge
- * @param {number} [segments]
- * @returns {{points: number[][], indices: number[]}}
- */
-export function capPatch(level, segments = 20) {
-  const start = Math.asin(clamp(level, -1, 1));
-  const points = [];
-  const indices = [];
-  for (let step = 0; step <= segments; step += 1) {
-    const angle = start + ((Math.PI - 2 * start) * step) / segments;
-    const x = Math.cos(angle);
-    points.push([x, Math.sin(angle)], [x, level]);
-  }
-  for (let step = 0; step < segments; step += 1) {
-    const a = step * 2;
-    indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-  }
-  return { points, indices };
-}
-
-/**
  * Where a point of the eyelid's unit disc is on the plane when the lid is `closed` (0 open, 1 shut).
  * The lid hangs from the top of the eye and comes down; its lower edge keeps the eye's curve.
  * @param {number[]} point on the unit disc
@@ -161,36 +139,55 @@ export function lidPoint(point, eye, closed, grow = 1.2) {
   return [eye.at[0] + point[0] * width, top - (1 - point[1]) * height * closed];
 }
 
+export const LINE_SAMPLES = 9;
+const OPEN_DEPTH = 1.5; // the deepest opening, in mouth half-heights
+
 /**
- * The open mouth's centre and half-sizes on the plane when it is `opening` (0 to 1) open.
- * It follows the chin down by a share of the jaw's drop, and grows from a slit to its full shape.
- * @param {{at: number[], half: number[]}} mouth
- * @param {{drop: number, share: number}} jaw
- * @param {number} opening
- * @returns {{x: number, y: number, width: number, height: number}}
+ * The line between the lips: the one the build found in the picture, or a straight line across the
+ * marked mouth when it found none. Always `LINE_SAMPLES` heights, evenly spread from x[0] to x[1].
+ * @param {{at: number[], half: number[], line?: {x: number[], y: number[]}}} mouth
+ * @returns {{x: number[], y: number[]}}
  */
-export function mouthShape(mouth, jaw, opening) {
-  return {
-    x: mouth.at[0],
-    y: mouth.at[1] - opening * jaw.drop * jaw.share,
-    width: mouth.half[0] * (0.78 + opening * 0.22),
-    height: mouth.half[1] * (0.12 + opening * 0.88),
-  };
+export function lipLine(mouth) {
+  const line = mouth.line;
+  if (line && line.x?.length === 2 && line.x[1] > line.x[0] && line.y?.length >= 2) {
+    return { x: [...line.x], y: Array.from({ length: LINE_SAMPLES }, (_, index) => heightOn(line.y, index / (LINE_SAMPLES - 1))) };
+  }
+  return { x: [mouth.at[0] - mouth.half[0] * 0.9, mouth.at[0] + mouth.half[0] * 0.9], y: new Array(LINE_SAMPLES).fill(mouth.at[1]) };
+}
+
+/** A height on a list of evenly spread heights, at `share` (0 to 1) of the way along, straight between them. */
+export function heightOn(heights, share) {
+  const place = clamp(share, 0, 1) * (heights.length - 1);
+  const before = Math.min(heights.length - 2, Math.floor(place));
+  const part = place - before;
+  return heights[before] * (1 - part) + heights[before + 1] * part;
 }
 
 /**
- * A point of the mouth's unit disc on the plane, turned by the mouth's tilt.
- * @param {number[]} point
- * @param {{x: number, y: number, width: number, height: number}} shape
- * @param {number} [tilt] radians
- * @returns {number[]} [x, y]
+ * How far down the lower edge of the opening is, as a share of its deepest, at `share` (0 to 1) of the way
+ * along the lip line. The corners (0 and 1) stay pinned to the line; the middle drops furthest.
+ * @param {number} share
+ * @returns {number}
  */
-export function mouthPoint(point, shape, tilt = 0) {
-  const x = point[0] * shape.width;
-  const y = point[1] * shape.height;
-  const cos = Math.cos(tilt);
-  const sin = Math.sin(tilt);
-  return [shape.x + x * cos - y * sin, shape.y + x * sin + y * cos];
+export const openingProfile = (share) => Math.pow(Math.max(0, Math.sin(Math.PI * clamp(share, 0, 1))), 0.85);
+
+/** The deepest the mouth opens, on the plane: a share of the marked open mouth's half-height. */
+export const openingDepth = (mouth) => mouth.half[1] * OPEN_DEPTH;
+
+/**
+ * The part of the plane the mouth's patch must cover: the lip line, the deepest opening and the rim below.
+ * @returns {{left: number, right: number, top: number, bottom: number}}
+ */
+export function mouthBounds(mouth, line = lipLine(mouth)) {
+  const width = line.x[1] - line.x[0];
+  const depth = openingDepth(mouth);
+  return {
+    left: line.x[0] - width * 0.08,
+    right: line.x[1] + width * 0.08,
+    top: Math.max(...line.y) + depth * 0.2,
+    bottom: Math.min(...line.y) - depth * 1.45,
+  };
 }
 
 /**

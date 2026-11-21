@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>talking-head preview sheet</title>
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+<style>
+  body { margin: 0; background: #1d2433; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<canvas id="sheet"></canvas>
+<script type="module">
+  // Draws six still poses of a finished head onto one sheet and hands the PNG to `head preview`.
+  import { createTalkingHead } from '/viewer/viewer.js';
+
+  const query = new URLSearchParams(location.search);
+  const TILE = Math.min(1024, Math.max(160, Number(query.get('tile')) || 420));
+  const LABEL = Math.round(TILE * 0.09);
+  const COLUMNS = 3;
+  const PAPER = '#ece7dc';
+  const INK = '#1d2433';
+  const POSES = [
+    ['front, at rest', {}],
+    ['turned left', { yaw: -1 }],
+    ['turned right', { yaw: 1 }],
+    ['blink', { eyes: 1 }],
+    ['mouth open', { mouth: 1 }],
+    ['turned, talking, half blink', { yaw: 0.7, pitch: 0.12, eyes: 0.55, mouth: 0.7 }],
+  ];
+
+  const report = (name, body) => fetch(`/save/${name}`, { method: 'POST', body });
+
+  async function main() {
+    const stage = document.getElementById('stage');
+    stage.style.width = stage.style.height = `${TILE}px`;
+    const surface = await (await fetch(query.get('surface'))).json();
+    const turn = Number.isFinite(surface.maxTurn) ? surface.maxTurn : 0.6;
+    const head = createTalkingHead(stage, { model: query.get('model'), surface, animate: false, followPointer: false });
+    await head.ready;
+
+    const sheet = document.getElementById('sheet');
+    const rows = Math.ceil(POSES.length / COLUMNS);
+    sheet.width = TILE * COLUMNS;
+    sheet.height = (TILE + LABEL) * rows;
+    const context = sheet.getContext('2d');
+    context.fillStyle = PAPER;
+    context.fillRect(0, 0, sheet.width, sheet.height);
+    context.font = `${Math.round(LABEL * 0.5)}px ui-monospace, Menlo, Consolas, monospace`;
+    context.textBaseline = 'middle';
+    POSES.forEach(([label, pose], index) => {
+      const x = (index % COLUMNS) * TILE;
+      const y = Math.floor(index / COLUMNS) * (TILE + LABEL);
+      head.renderPose({ ...pose, yaw: (pose.yaw ?? 0) * turn });
+      context.drawImage(stage, x, y, TILE, TILE); // straight after the render, while the drawing is still there
+      context.fillStyle = INK;
+      context.fillRect(x, y + TILE, TILE, LABEL);
+      context.fillStyle = PAPER;
+      context.fillText(label, x + LABEL * 0.4, y + TILE + LABEL / 2);
+      context.strokeStyle = INK;
+      context.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+    });
+    await report('preview', sheet.toDataURL('image/png'));
+    document.title = 'done';
+  }
+
+  main().catch((error) => report('error', String(error?.stack || error)));
+</script>
+</body>
+</html>

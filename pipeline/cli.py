@@ -87,6 +87,15 @@ def generator_python() -> str:
     return os.environ.get("HEAD_PYTHON") or sys.executable
 
 
+def python_can(code: str, python: str | None = None) -> bool:
+    """True when a one-line Python probe succeeds. -I and the skill folder as cwd keep the current folder,
+    PYTHONPATH and user site-packages off the import path, so a planted gradio_client.py there cannot run."""
+    try:
+        return subprocess.run([python or generator_python(), "-I", "-c", code], capture_output=True, cwd=SKILL, timeout=120).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 # ---------------------------------------------------------------- projects
 
 class Project:
@@ -236,7 +245,7 @@ def command_check(args: argparse.Namespace) -> int:
     line(three is not None, f"three.js ({three})" if three else "three.js for the preview and example pages",
          f"cd {SKILL} && npm install     (needed by head preview, head mark --page, head serve and head test --browser)", needed=False)
 
-    has_client = subprocess.run([generator_python(), "-c", "import gradio_client"], capture_output=True).returncode == 0
+    has_client = python_can("import gradio_client")
     line(has_client, "gradio_client (only for --source space)", f"{generator_python()} -m pip install gradio_client", needed=False)
     if not args.online:
         out("note the public generator was not contacted (add --online to check it; that sends a request to huggingface.co)")
